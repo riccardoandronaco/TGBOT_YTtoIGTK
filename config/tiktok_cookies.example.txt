@@ -1,0 +1,5 @@
+# Netscape HTTP Cookie File
+# http://curl.haxx.se/rfc/cookie.html
+# This is a generated file!  Do not edit.
+
+.tiktok.com	TRUE	/	FALSE	1735689600	sessionid	YOUR_SESSION_ID_HERE
