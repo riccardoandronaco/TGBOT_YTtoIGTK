@@ -78,14 +78,14 @@ class TikTokHandler:
 
     def get_stats(self, username=None):
         """
-        Fetches TikTok follower count and total likes.
-        Returns a dict: {'followers': int, 'likes': int} or values with "N/A"
+        Fetches TikTok follower count, total likes, and video count.
+        Returns a dict: {'followers': int, 'likes': int, 'video_count': int} or values with "N/A"
         """
         if username is None:
             username = os.getenv("TIKTOK_USERNAME", "duodisagio")
 
         url = f"https://www.tiktok.com/@{username}"
-        stats = {'followers': "N/A", 'likes': "N/A"}
+        stats = {'followers': "N/A", 'likes': "N/A", 'video_count': "N/A"}
         
         # Method 1: yt-dlp 
         try:
@@ -101,12 +101,15 @@ class TikTokHandler:
                 count = info.get('follower_count') or info.get('channel_follower_count')
                 if count is not None:
                     stats['followers'] = int(count)
+                
+                # video_count (sometimes available as playlist_count if treated as playlist)
+                # but yt-dlp might not expose it directly on the channel info consistently
         except Exception as e:
             logger.debug(f"yt-dlp scraping failed for {url}: {e}")
 
         # Method 2: HTML Scraping with Cookies
         try:
-            if stats['followers'] == "N/A" or stats['likes'] == "N/A":
+            if stats['followers'] == "N/A" or stats['likes'] == "N/A" or stats['video_count'] == "N/A":
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 }
@@ -141,8 +144,13 @@ class TikTokHandler:
                             if m3:
                                 stats['likes'] = int(m3.group(1))
 
+                # Video Count
+                if stats['video_count'] == "N/A":
+                    match_videos = re.search(r'"videoCount":(\d+)', html)
+                    if match_videos:
+                        stats['video_count'] = int(match_videos.group(1))
         except Exception as e:
-            logger.warning(f"Stats scraping failed: {e}")
+            logger.debug(f"HTML scraping failed: {e}")
 
         return stats
 

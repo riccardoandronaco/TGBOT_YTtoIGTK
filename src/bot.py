@@ -107,18 +107,21 @@ async def recap_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         yt_subs = await loop.run_in_executor(None, yt_handler.get_subscriber_count, YOUTUBE_CHANNEL_URL)
         
         # 2. Instagram Stats (using cached session or public fetch)
-        ig_followers = await loop.run_in_executor(None, ig_handler.get_followers)
+        ig_stats = await loop.run_in_executor(None, ig_handler.get_stats)
+        ig_followers = ig_stats.get('followers', "N/A")
+        ig_media_count = ig_stats.get('media_count', "N/A")
         
         # 3. TikTok Stats
         tt_stats = await loop.run_in_executor(None, tiktok_handler.get_stats, TIKTOK_USERNAME)
         tt_followers = tt_stats.get('followers', "N/A")
         tt_likes = tt_stats.get('likes', "N/A")
+        tt_video_count = tt_stats.get('video_count', "N/A")
 
         msg = (
             f"📈 **STATISTICHE SOCIAL**\n\n"
             f"🟥 **YouTube**: {yt_subs} Iscritti\n"
-            f"🟪 **Instagram**: {ig_followers} Follower\n"
-            f"⬛ **TikTok**: {tt_followers} Follower | {tt_likes} Mi piace"
+            f"🟪 **Instagram**: {ig_followers} Follower | {ig_media_count} Post\n"
+            f"⬛ **TikTok**: {tt_followers} Follower | {tt_likes} Likes | {tt_video_count} Video"
         )
         await update.message.reply_text(msg, parse_mode='Markdown')
 

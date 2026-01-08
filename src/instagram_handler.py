@@ -42,10 +42,9 @@ class InstagramHandler:
         # Save session
         self.cl.dump_settings(self.session_file)
 
-    def get_followers(self):
+    def get_stats(self):
         """
-        Returns the number of followers for the specified user.
-        Tries to use cached session first without full login.
+        Returns a dict with followers and media count.
         """
         try:
             # Try loading session if available to avoid being completely anonymous (rate limits)
@@ -58,10 +57,13 @@ class InstagramHandler:
             # user_info_by_username is often more reliable for public stats than user_info(id)
             # if we don't have the ID handy.
             info = self.cl.user_info_by_username(self.username)
-            return info.follower_count
+            return {
+                'followers': info.follower_count,
+                'media_count': info.media_count
+            }
         except Exception as e:
-            logger.error(f"Error fetching IG followers: {e}")
-            return "Errore"
+            logger.error(f"Error fetching IG stats: {e}")
+            return {'followers': "Errore", 'media_count': "Errore"}
 
     def upload_video(self, video_path, caption):
         """
