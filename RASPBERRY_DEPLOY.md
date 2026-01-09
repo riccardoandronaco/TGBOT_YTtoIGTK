@@ -18,6 +18,12 @@ sudo apt install git python3-pip python3-venv ffmpeg -y
 ### Aumentare lo Swap (CRITICO per Pi 3)
 Il Pi 3 ha solo 1GB di RAM. Quando il browser si apre per l'upload, potrebbe crashare. Aumenta lo swap a 2GB.
 
+**Se il comando sotto dà errore "File non trovato", installa prima il pacchetto:**
+```bash
+sudo apt update
+sudo apt install dphys-swapfile -y
+```
+
 1. Modifica il file di configurazione dphys-swapfile:
    ```bash
    sudo nano /etc/dphys-swapfile
@@ -70,7 +76,17 @@ Il Pi 3 ha solo 1GB di RAM. Quando il browser si apre per l'upload, potrebbe cra
    Incolla le tue variabili (Telegram Token, IG user/pass, ecc.). Salva e esci.
 
 2. **Cookie TikTok**:
-   Devi trasferire il file dei cookie dal tuo PC al Raspberry. Puoi usare `scp` o creare il file incollando il contenuto.
+   Devi trasferire il file dei cookie dal tuo PC al Raspberry.
+   
+   **Metodo A: Copia via SCP (da terminale Windows/PC)**
+   Esegui questo comando dal teu PC (non dal Raspberry), assicurandoti di essere nella cartella del progetto:
+   ```powershell
+   scp config/tiktok_cookies.txt pi@192.168.1.XX:/home/pi/TGBOT_YTtoIGTK/config/
+   ```
+   *(Sostituisci `192.168.1.XX` con l'IP del Raspberry e `pi` con il tuo username se diverso).*
+
+   **Metodo B: Copia Incolla manuale**
+   Sul Raspberry:
    ```bash
    nano config/tiktok_cookies.txt
    # Incolla il contenuto del tuo file cookie Netscape esportato
