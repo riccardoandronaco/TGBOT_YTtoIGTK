@@ -99,15 +99,19 @@ def upload_video(video_path, caption, cookie_path, headless=True):
 
         page = context.new_page()
         
+        # Raspberry Pi often needs more time due to limited CPU/RAM
+        # Increasing default timeout to 120 seconds
+        page.set_default_timeout(120000)
+        
         # 1. Go to Upload Page
         logger.info("Navigating to TikTok upload page...")
-        page.goto("https://www.tiktok.com/upload?lang=en")
+        page.goto("https://www.tiktok.com/upload?lang=en", timeout=120000)
         
         # Check if login is needed (redirected to login page?)
         # A simple check: wait for iframe or select file button
         try:
             # Wait for file input or iframe
-            page.wait_for_selector('iframe, input[type="file"]', timeout=10000)
+            page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
         except:
              logger.warning("Upload page check timeout - might be stuck or logged out.")
 
