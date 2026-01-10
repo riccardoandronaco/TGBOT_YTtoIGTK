@@ -154,7 +154,7 @@ class TikTokHandler:
 
         return stats
 
-    def upload_video(self, video_path, description):
+    def upload_video(self, video_path, description, status_callback=None):
         """
         Uploads video to TikTok using Robust Playwright Implementation.
         """
@@ -170,7 +170,8 @@ class TikTokHandler:
                 video_path=video_path,
                 caption=description,
                 cookie_path=self.cookies_path,
-                headless=True # Running headless by default
+                headless=True, # Running headless by default
+                status_callback=status_callback
             )
             
             if not success:

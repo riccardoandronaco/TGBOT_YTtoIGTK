@@ -331,15 +331,50 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 2. TikTok
         if not history_handler.exists(video_id, "tiktok"):
             try:
-                await query.edit_message_caption(caption="2/2 🎵 Pubblicazione su TikTok (Guarda il browser!)...")
-                result = await loop.run_in_executor(None, tiktok_handler.upload_video, path, caption)
+                await query.edit_message_caption(caption="2/2 🎵 Pubblicazione su TikTok...\n(Attendi avanzamento)")
+                
+                # Callback to update message
+                def progress_callback(status_text):
+                     future = asyncio.run_coroutine_threadsafe(
+                        query.edit_message_caption(caption=f"2/2 🎵 Pubblicazione su TikTok...\n📝 {status_text}"),
+                        loop
+                     )
+                     try:
+                         future.result(timeout=1)
+                     except:
+                         pass
+
+                result = await loop.run_in_executor(None, lambda: tiktok_handler.upload_video(path, caption, status_callback=progress_callback))
                 if result:
                     history_handler.add(video_id, "tiktok")
                 else:
                     errors.append("TikTok: Upload fallito/non confermato")
+                    # Check for debug screenshot
+                    if os.path.exists("debug_upload_fail.png"):
+                        try:
+                            await context.bot.send_photo(
+                                chat_id=update.effective_chat.id, 
+                                photo=open("debug_upload_fail.png", 'rb'),
+                                caption="📸 Screenshot Fallimento TikTok"
+                            )
+                            os.remove("debug_upload_fail.png")
+                        except Exception as img_e:
+                            logger.error(f"Failed to send debug screenshot: {img_e}")
+
             except Exception as e:
                 logger.error(f"Error uploading to TikTok: {e}")
                 errors.append(f"TikTok: {e}")
+                # Check for debug screenshot on exception
+                if os.path.exists("debug_upload_fail.png"):
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id, 
+                            photo=open("debug_upload_fail.png", 'rb'),
+                            caption="📸 Screenshot Errore TikTok"
+                        )
+                        os.remove("debug_upload_fail.png")
+                    except Exception as img_e:
+                        logger.error(f"Failed to send debug screenshot: {img_e}")
 
         # Final Status
         if not errors:
@@ -388,24 +423,60 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("File video non trovato!", show_alert=True)
             return
 
-        await query.edit_message_caption(caption="⏳ Caricamento su TikTok in corso (Controlla la finestra del browser!)...")
+        await query.edit_message_caption(caption="⏳ Caricamento su TikTok in corso...\n(Attendi avanzamento)")
 
         try:
             loop = asyncio.get_running_loop()
             caption = f"{title} #shorts"
 
+            # Callback to update message
+            def progress_callback(status_text):
+                    future = asyncio.run_coroutine_threadsafe(
+                    query.edit_message_caption(caption=f"⏳ Caricamento su TikTok in corso...\n📝 {status_text}"),
+                    loop
+                    )
+                    try:
+                        future.result(timeout=1)
+                    except:
+                        pass
+
             # Upload to TikTok
-            result = await loop.run_in_executor(None, tiktok_handler.upload_video, path, caption)
+            result = await loop.run_in_executor(None, lambda: tiktok_handler.upload_video(path, caption, status_callback=progress_callback))
             
             if result:
                 history_handler.add(video_id, "tiktok")
                 await refresh_keyboard(msg_caption=f"✅ Pubblicato su TikTok!\n{title}")
             else:
                 await refresh_keyboard(msg_caption=f"⚠️ Upload TikTok fallito (o non confermato).")
+                
+                # Check for debug screenshot even if False returned without exception
+                if os.path.exists("debug_upload_fail.png"):
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id, 
+                            photo=open("debug_upload_fail.png", 'rb'),
+                            caption="📸 Screenshot Fallimento TikTok"
+                        )
+                        os.remove("debug_upload_fail.png")
+                    except Exception as img_e:
+                        logger.error(f"Failed to send debug screenshot: {img_e}")
 
         except Exception as e:
             logger.error(f"Error uploading to TikTok: {e}")
             await refresh_keyboard(msg_caption=f"❌ Errore TikTok: {e}")
+            
+            # Send debug screenshot if available
+            if os.path.exists("debug_upload_fail.png"):
+                try:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id, 
+                        photo=open("debug_upload_fail.png", 'rb'),
+                        caption="📸 Screenshot Errore TikTok"
+                    )
+                    # Clean up
+                    os.remove("debug_upload_fail.png")
+                except Exception as img_e:
+                    logger.error(f"Failed to send debug screenshot: {img_e}")
         
         return
 

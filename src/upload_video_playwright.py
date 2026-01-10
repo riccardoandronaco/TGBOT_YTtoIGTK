@@ -64,11 +64,19 @@ def load_cookies(cookie_path):
     
     return cookies
 
-def upload_video(video_path, caption, cookie_path, headless=True):
+def upload_video(video_path, caption, cookie_path, headless=True, status_callback=None):
     """
     Robust upload using Playwright.
     """
-    logger.info(f"Starting Playwright upload for {video_path}")
+    def log(msg):
+        logger.info(msg)
+        if status_callback:
+            try:
+                status_callback(msg)
+            except:
+                pass
+
+    log(f"Starting Playwright upload for {video_path}")
     
     # Ensure absolute path for video (browsers need it)
     video_path = os.path.abspath(video_path)
@@ -81,8 +89,11 @@ def upload_video(video_path, caption, cookie_path, headless=True):
         browser = p.chromium.launch(headless=headless, args=["--start-maximized", "--disable-blink-features=AutomationControlled"])
         
         # Create context with User Agent to avoid detection
+        # We use a Linux User-Agent to match the Raspberry Pi environment better
+        # USER: When generating cookies on Windows, please spoof this User-Agent in DevTools!
+        # UA: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             # viewport={'width': 1920, 'height': 1080} # Let it be responsive or maximized
             viewport=None
         )
@@ -95,7 +106,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
         if tiktok_cookies:
             context.add_cookies(tiktok_cookies)
         else:
-            logger.warning("No TikTok cookies found! Login will likely fail.")
+            log("⚠️ No TikTok cookies found! Login will likely fail.")
 
         page = context.new_page()
         
@@ -104,7 +115,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
         page.set_default_timeout(120000)
         
         # 1. Go to Upload Page
-        logger.info("Navigating to TikTok upload page...")
+        log("1️⃣ Navigating to TikTok upload page...")
         page.goto("https://www.tiktok.com/upload?lang=en", timeout=120000)
         
         # Check if login is needed (redirected to login page?)
@@ -113,7 +124,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
             # Wait for file input or iframe
             page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
         except:
-             logger.warning("Upload page check timeout - might be stuck or logged out.")
+             log("⚠️ Upload page check timeout - might be stuck or logged out.")
 
         # Handle 'Select File'
         # TikTok upload often is an input[type="file"] hidden or inside an iframe
@@ -135,7 +146,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
              # logger.info("Direct file input not found, looking for buttons...")
              # This is tricky without visual execution, but usually file input is there just hidden.
         
-        logger.info("Uploading file...")
+        log("2️⃣ Uploading file...")
         try:
             file_input.set_input_files(video_path)
         except Exception as e:
@@ -147,7 +158,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
             
         # Wait for upload to complete (Look for "Uploaded" text or progress bar change)
         # Usually looking for the 'Caption' text box appearing is a good sign the previous step worked
-        logger.info("Waiting for upload to process...")
+        log("3️⃣ Waiting for processing...")
         
         # Wait for the editor container or caption input
         # The caption editor is inside a div with 'DraftEditor' usually
@@ -157,7 +168,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
             caption_locator.wait_for(state="visible", timeout=60000)
             
             # Fill Caption
-            logger.info("Setting caption...")
+            # log("Setting caption...") # Too verbose
             caption_locator.click()
             # Clear existing if any (filename usually auto-filled)
             # Make sure to wait a bit
@@ -179,7 +190,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
                  # Fallback if attribute changes
                  post_btn = upload_frame.locator('button:has-text("Post")').first
             
-            logger.info("Waiting for Post button to be enabled (upload verify)...")
+            log("4️⃣ Waiting for 'Post' button...")
             # Wait until not disabled
             # Verify if upload is done: Progress bar usually disappears or reaches 100%
             
@@ -193,12 +204,12 @@ def upload_video(video_path, caption, cookie_path, headless=True):
                 time.sleep(2)
             
             if not post_btn.is_enabled():
-                logger.error("Post button never enabled (Timeout). Analysis might be stuck.")
+                log("❌ Post button never enabled (Timeout). Analysis might be stuck.")
                 page.screenshot(path="debug_post_disabled.png")
                 browser.close()
                 return False
 
-            logger.info("Clicking Post...")
+            log("5️⃣ Clicking Post...")
             post_btn.click()
             
             # 5. Handle "Continue to post?" Modal (Content check)
@@ -212,16 +223,17 @@ def upload_video(video_path, caption, cookie_path, headless=True):
                 # Short wait to see if it pops up
                 try:
                     post_now_btn.wait_for(state="visible", timeout=5000)
-                    logger.info("Content check modal detected. Clicking 'Post now'...")
+                    log("⚠️ Content check modal detected. Clicking 'Post now'...")
                     post_now_btn.click()
                 except:
                     # Maybe it's inside the iframe?
                     post_now_btn_frame = upload_frame.locator('button:has-text("Post now")')
                     if post_now_btn_frame.count() > 0 and post_now_btn_frame.is_visible():
-                         logger.info("Content check modal detected (in frame). Clicking 'Post now'...")
+                         log("⚠️ Content check modal detected (in frame). Clicking 'Post now'...")
                          post_now_btn_frame.click()
                     else:
-                        logger.info("No content check modal detected (or timed out), proceeding.")
+                        # logger.info("No content check modal detected (or timed out), proceeding.")
+                        pass
 
             except Exception as e:
                 logger.warning(f"Error handling potential modal: {e}")
@@ -230,15 +242,15 @@ def upload_video(video_path, caption, cookie_path, headless=True):
             # "Manage your posts" button usually appears
             try:
                 upload_frame.wait_for_selector('text=Manage your posts', timeout=30000)
-                logger.info("Upload confirmed! (Found 'Manage your posts')")
+                log("✅ Upload confirmed!")
                 success = True
             except:
                 # Try alternatives
                 if "uploaded" in page.content():
-                    logger.info("Upload likely successful (found 'uploaded' text).")
+                    log("✅ Upload likely successful (found text).")
                     success = True
                 else:
-                    logger.warning("Could not explicitly confirm upload success message, but Post was clicked.")
+                    log("⚠️ Could not explicitly confirm success, but Post was clicked.")
                     page.screenshot(path="debug_after_post.png")
                     success = True # Tentative success
             
@@ -247,7 +259,7 @@ def upload_video(video_path, caption, cookie_path, headless=True):
 
         except Exception as e:
             logger.error(f"Error during upload workflow: {e}")
-            page.screenshot(path="debug_workflow_fail.png")
+            page.screenshot(path="debug_upload_fail.png")
             browser.close()
             return False
 
