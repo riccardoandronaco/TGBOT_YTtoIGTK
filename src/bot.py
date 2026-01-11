@@ -66,8 +66,11 @@ async def _fetch_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, platf
         return
 
     filter_msg = f" ({platform_filter})" if platform_filter else ""
-    await message.reply_text(f"Sto cercando il prossimo short non pubblicato{filter_msg}... (potrebbe richiedere qualche secondo)")
-
+    # Only send "Sto cercando" if it's a new command, not from a button click update (which we handled with edit_text)
+    # But checking update.callback_query might be enough.
+    # Actually, visual feedback is good. Let's keep it minimal.
+    # await message.reply_text(f"Sto cercando il prossimo short non pubblicato{filter_msg}... (potrebbe richiedere qualche secondo)")
+    
     try:
         loop = asyncio.get_running_loop()
         # Pass the platform_filter to the handler
@@ -101,14 +104,16 @@ async def _fetch_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, platf
         logger.error(f"Error fetching next short: {e}")
         await message.reply_text(f"Errore durante la ricerca: {e}")
 
-async def fetch_next_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _fetch_logic(update, context, None)
-
-async def fetch_ig(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _fetch_logic(update, context, "instagram")
-
-async def fetch_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _fetch_logic(update, context, "tiktok")
+async def fetch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("🌍 Qualsiasi (Non pubblicato)", callback_data='fetch_mode_any')],
+        [InlineKeyboardButton("📸 Solo per Instagram", callback_data='fetch_mode_ig')],
+        [InlineKeyboardButton("🎵 Solo per TikTok", callback_data='fetch_mode_tiktok')]
+    ]
+    await update.message.reply_text("🔍 **Che tipo di video cerchi?**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
@@ -228,20 +233,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     logger.info(f"Received message: {text}")
     
-    # Improved Regex to capture m.youtube.com, music.youtube.com, shorts, etc.
-    # Matches http/https, optional www/m/music subdomain, youtube.com or youtu.be, and then the path
-    url_match = re.search(r'(https?://(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com|youtu\.be)/[\w\-\./\?=&]+)', text)
+    # Matches http/https, optional subdomains (www, m, music), youtube.com or youtu.be, and then ANY non-whitespace characters
+    # This covers /watch?v=ID, /shorts/ID, /v/ID, and any query parameters
+    url_match = re.search(r'(https?://(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com)/\S+)', text)
     
     if not url_match:
-        # If text is not a command and has no link, we might want to ignore it or facilitate debugging
-        logger.info("No valid YouTube link found in message.")
-        # Only reply if the user sent something that LOOKS like a link or is asking for help, 
-        # otherwise we might annoy them if they are just chatting (though a bot usually doesn't chat).
-        if "http" in text:
-             await update.message.reply_text("Non ho trovato un link YouTube valido nel messaggio (supporto solo youtube.com e youtu.be).")
+        # If text contains "youtube.com" or "youtu.be" but regex failed, log it for debugging
+        if "youtube.com" in text or "youtu.be" in text:
+             logger.warning(f"Message seemed to contain YouTube link but Regex failed. Text: {text}")
+             await update.message.reply_text("Ho rilevato YouTube nel testo ma non sono riuscito a estrarre un link valido. Assicurati che inizi con http/https.")
         return
 
     url = url_match.group(0)
+    # Clean trailing punctuation that might have been captured (like . or , at end of sentence)
+    url = url.rstrip('.,;!?')
     
     await update.message.reply_text(f"Link trovato: {url}\nSto scaricando il video... attendi.")
     await process_video_url(update, context, url)
@@ -310,6 +315,29 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == 'hist_close':
         await query.edit_message_text("Operazione completata.")
         return
+    # --- Fetch Mode Selection ---
+    if query.data.startswith('fetch_mode_'):
+        mode = query.data.split('_')[2]
+        filter_p = None
+        mode_text = "TUTTI"
+        
+        if mode == 'ig': 
+            filter_p = 'instagram'
+            mode_text = "INSTAGRAM"
+        elif mode == 'tiktok': 
+            filter_p = 'tiktok'
+            mode_text = "TIKTOK"
+            
+        await query.edit_message_text(f"🔎 Avvio ricerca per: {mode_text}...")
+        # Since _fetch_logic sends a "Sto cercando" message using reply_text, it works fine.
+        # But we might want to avoid double loading messages.
+        # _fetch_logic uses 'reply_text' which replies to the original command message usually.
+        # Here we are in a callback query from a bot message. 
+        # _fetch_logic will use query.message.
+        await _fetch_logic(update, context, filter_p)
+        return
+    # ----------------------------
+
     # --------------------------
 
     # Handle fetch flow buttons
@@ -561,24 +589,20 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         os.remove("debug_upload_fail.png")
                     except Exception as img_e:
                         logger.error(f"Failed to send debug screenshot: {img_e}")
+Menu)"),
+        BotCommand("history", "Gestisci storico video"),
+        BotCommand("recap", "Visualizza statistiche")
+    ])
 
-        except Exception as e:
-            logger.error(f"Error uploading to TikTok: {e}")
-            await refresh_keyboard(msg_caption=f"❌ Errore TikTok: {e}")
-            
-            # Send debug screenshot if available
-            if os.path.exists("debug_upload_fail.png"):
-                try:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id, 
-                        photo=open("debug_upload_fail.png", 'rb'),
-                        caption="📸 Screenshot Errore TikTok"
-                    )
-                    # Clean up
-                    os.remove("debug_upload_fail.png")
-                except Exception as img_e:
-                    logger.error(f"Failed to send debug screenshot: {img_e}")
-        
+if __name__ == '__main__':
+    if not TELEGRAM_TOKEN:
+        print("Error: TELEGRAM_BOT_TOKEN not found in .env")
+        exit(1)
+
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('fetch', fetch_command
         return
 
 async def post_init(application: Application):
