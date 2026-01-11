@@ -301,28 +301,65 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
 
             # Wait for "Your video has been uploaded" or redirect or modal
             # "Manage your posts" button usually appears
+            success = False
+            msg = "Unknown Error"
+
             try:
+                # Primary success check
                 upload_frame.wait_for_selector('text=Manage your posts', timeout=30000)
-                log("✅ Upload confirmed!")
+                log("✅ Upload confirmed (found 'Manage your posts')!")
                 success = True
+                msg = "Uploaded successfully"
             except:
                 # Try alternatives
-                if "uploaded" in page.content():
-                    log("✅ Upload likely successful (found text).")
+                if "uploaded" in page.content().lower():
+                    log("✅ Upload likely successful (found 'uploaded' text).")
                     success = True
+                    msg = "Uploaded (text confirmed)"
                 else:
-                    log("⚠️ Could not explicitly confirm success, but Post was clicked.")
-                    page.screenshot(path="debug_after_post.png")
-                    success = True # Tentative success
+                    log("⚠️ Could not confirm success. checking for Drafts...")
+                    
+                    # Draft Fallback
+                    # Try to find a button with "Draft" text (e.g. "Save as draft")
+                    # Heuristic search for buttons containing "Draft"
+                    draft_locators = [
+                        'button:has-text("Draft")',
+                        'div[role="button"]:has-text("Draft")', 
+                        'span:has-text("Save as draft")'
+                    ]
+                    
+                    draft_clicked = False
+                    for sel in draft_locators:
+                        d_btn = upload_frame.locator(sel).first
+                        if d_btn.count() > 0 and d_btn.is_visible():
+                            log(f"found Draft button ({sel}). Clicking...")
+                            try:
+                                d_btn.click()
+                                time.sleep(3)
+                                success = True
+                                msg = "Saved as Draft (Post failed)"
+                                draft_clicked = True
+                                break
+                            except Exception as de:
+                                log(f"Failed to click Draft: {de}")
+                    
+                    if not draft_clicked:
+                        log("❌ Post verification failed AND No Draft option found.")
+                        page.screenshot(path="debug_upload_failed_final.png")
+                        success = False
+                        msg = "Upload Verify Failed & No Draft"
             
             browser.close()
-            return success
+            return (success, msg)
 
         except Exception as e:
             logger.error(f"Error during upload workflow: {e}")
             page.screenshot(path="debug_upload_fail.png")
-            browser.close()
-            return False
+            try:
+                browser.close()
+            except:
+                pass
+            return (False, str(e))
 
 if __name__ == "__main__":
     # Test run
