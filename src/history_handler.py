@@ -71,9 +71,13 @@ class HistoryHandler:
                 return True
         return False
 
-    def get_recent(self, platform, limit=5):
-        """Returns the last N items for a platform (reversed order: newest first)"""
+    def get_paged(self, platform, page=0, page_size=5):
+        """Returns a page of items for a platform (reversed order: newest first)"""
         if platform in self.data and self.data[platform]:
-            return self.data[platform][-limit:][::-1]
-        return []
+            # Reverse the full list to have newest first
+            full_list = self.data[platform][::-1]
+            start = page * page_size
+            end = start + page_size
+            return full_list[start:end], len(full_list)
+        return [], 0
 

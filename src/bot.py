@@ -235,50 +235,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Link trovato: {url}\nSto scaricando il video... attendi.")
     await process_video_url(update, context, url)
 
+async def show_history_page(query, platform, page):
+    page_size = 5
+    items, total_count = history_handler.get_paged(platform, page, page_size)
+    total_pages = (total_count + page_size - 1) // page_size
+    
+    # Adjust page if we deleted the last item on the last page
+    if page >= total_pages and page > 0:
+        page = total_pages - 1
+        items, total_count = history_handler.get_paged(platform, page, page_size)
+
+    txt = f"📜 **Storico {platform}** (Pagina {page+1}/{total_pages if total_pages > 0 else 1})\nTotale: {total_count} video\n\n"
+    keyboard = []
+    
+    if not items:
+        txt += "_Nessun video trovato._"
+    
+    for vid in items:
+        keyboard.append([InlineKeyboardButton(f"🗑️ Rimuovi {vid}", callback_data=f"hist_del_{platform}_{page}_{vid}")])
+    
+    # Navigation
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prec.", callback_data=f"hist_view_{platform}_{page-1}"))
+    if (page + 1) * page_size < total_count:
+        nav_row.append(InlineKeyboardButton("Succ. ➡️", callback_data=f"hist_view_{platform}_{page+1}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("❌ Chiudi", callback_data="hist_close")])
+    
+    await query.edit_message_text(text=txt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     # --- History Management ---
     if query.data.startswith('hist_view_'):
-        platform = query.data.split('_')[2]
-        recent = history_handler.get_recent(platform, 5)
-        
-        txt = f"📜 **Ultimi 5 video in {platform}:**\n"
-        keyboard = []
-        if not recent:
-            txt += "_Nessun video trovato recentemente._"
-        
-        for vid in recent:
-            txt += f"- `{vid}`\n"
-            keyboard.append([InlineKeyboardButton(f"🗑️ Rimuovi {vid}", callback_data=f"hist_del_{platform}_{vid}")])
-        
-        keyboard.append([InlineKeyboardButton("❌ Chiudi", callback_data="hist_close")])
-        
-        await query.edit_message_text(text=txt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        parts = query.data.split('_')
+        platform = parts[2]
+        page = int(parts[3]) if len(parts) > 3 else 0
+        await show_history_page(query, platform, page)
         return
 
     if query.data.startswith('hist_del_'):
         parts = query.data.split('_')
-        # format: hist_del_platform_vid
+        # format: hist_del_platform_page_vid
         platform = parts[2]
-        vid = parts[3]
+        page = int(parts[3])
+        vid = parts[4]
         
         if history_handler.remove(vid, platform):
              await query.answer(f"Video {vid} rimosso da {platform}!")
-             # Refresh view
-             recent = history_handler.get_recent(platform, 5)
-             txt = f"📜 **Ultimi 5 video in {platform}:**\n"
-             keyboard = []
-             if not recent:
-                txt += "_Nessun video trovato recentemente._"
-             for v in recent:
-                txt += f"- `{v}`\n"
-                keyboard.append([InlineKeyboardButton(f"🗑️ Rimuovi {v}", callback_data=f"hist_del_{platform}_{v}")])
-             keyboard.append([InlineKeyboardButton("❌ Chiudi", callback_data="hist_close")])
-             await query.edit_message_text(text=txt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         else:
             await query.answer("Errore rimozione o già rimosso.")
+        
+        # Refresh view
+        await show_history_page(query, platform, page)
         return
 
     if query.data == 'hist_close':
