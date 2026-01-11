@@ -157,16 +157,12 @@ class TikTokHandler:
     def upload_video(self, video_path, description, status_callback=None):
         """
         Uploads video to TikTok using Robust Playwright Implementation.
+        Returns: (success, message) tuple or raises exception
         """
         logger.info(f"Starting TikTok upload: {video_path}")
         
-        # We try to use the pickle cookie if available (more reliable for session), 
-        # otherwise fallback to text.
-        # But our new script handles both logic or expects config path.
-        # We pass the cookies_path (txt) directly as it handles dual loading inside.
-        
         try:
-            success = playwright_upload(
+            result = playwright_upload(
                 video_path=video_path,
                 caption=description,
                 cookie_path=self.cookies_path,
@@ -174,13 +170,21 @@ class TikTokHandler:
                 status_callback=status_callback
             )
             
+            # playwight_upload now returns (bool, string)
+            if isinstance(result, tuple):
+                success, msg = result
+            else:
+                success = result
+                msg = "Upload completed" if result else "Failed (Unknown reason)"
+            
             if not success:
-               raise Exception("Playwright script returned False (Upload failed)")
+               logger.error(f"TikTok upload failed: {msg}")
+               return False, msg
                
-            logger.info("TikTok upload completed successfully.")
-            return True
+            logger.info(f"TikTok upload completed successfully: {msg}")
+            return True, msg
         except Exception as e:
             logger.error(f"TikTok upload failed with exception: {e}")
-            raise e
+            return False, str(e)
 
 

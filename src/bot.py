@@ -583,25 +583,34 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
 
             # Upload to TikTok
+            # result is now (found_bool, message_str) from updated handler logic
             result = await loop.run_in_executor(None, lambda: tiktok_handler.upload_video(path, caption, status_callback=progress_callback))
             
-            if result:
-                history_handler.add(video_id, "tiktok")
-                await refresh_keyboard(msg_caption=f"✅ Pubblicato su TikTok!\n{title}")
+            # Unpack result tuple or handle boolean legacy
+            if isinstance(result, tuple):
+                success, msg = result
             else:
-                await refresh_keyboard(msg_caption=f"⚠️ Upload TikTok fallito (o non confermato).")
+                success = result
+                msg = "Unknown status"
+
+            if success:
+                history_handler.add(video_id, "tiktok")
+                await refresh_keyboard(msg_caption=f"✅ Pubblicato su TikTok!\n{title}\n📝 {msg}")
+            else:
+                await refresh_keyboard(msg_caption=f"⚠️ Upload TikTok fallito: {msg}")
                 
-                # Check for debug screenshot even if False returned without exception
-                if os.path.exists("debug_upload_fail.png"):
-                    try:
-                        await context.bot.send_photo(
-                            chat_id=update.effective_chat.id, 
-                            photo=open("debug_upload_fail.png", 'rb'),
-                            caption="📸 Screenshot Fallimento TikTok"
-                        )
-                        os.remove("debug_upload_fail.png")
-                    except Exception as img_e:
-                        logger.error(f"Failed to send debug screenshot: {img_e}")
+                # Check for debug screenshots
+                for img_name in ["debug_upload_fail.png", "debug_post_disabled.png", "debug_login_redirect.png", "debug_profile_check.png", "debug_upload_error.png"]:
+                    if os.path.exists(img_name):
+                        try:
+                            await context.bot.send_photo(
+                                chat_id=update.effective_chat.id, 
+                                photo=open(img_name, 'rb'),
+                                caption=f"📸 Debug: {img_name}"
+                            )
+                            os.remove(img_name)
+                        except Exception as img_e:
+                            logger.error(f"Failed to send debug screenshot {img_name}: {img_e}")
 
         except Exception as e:
             logger.error(f"Error uploading to TikTok: {e}")
