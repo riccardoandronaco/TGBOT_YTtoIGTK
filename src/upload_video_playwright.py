@@ -85,8 +85,17 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         return False
     
     with sync_playwright() as p:
-        # Launch browser
-        browser = p.chromium.launch(headless=headless, args=["--start-maximized", "--disable-blink-features=AutomationControlled"])
+        # Launch browser with Linux-optimized args
+        browser = p.chromium.launch(
+            headless=headless, 
+            args=[
+                "--start-maximized", 
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox", 
+                "--disable-setuid-sandbox",
+                "--disable-gpu" 
+            ]
+        )
         
         # Create context with User Agent to avoid detection
         # We use a Linux User-Agent to match the Raspberry Pi environment better
@@ -116,7 +125,19 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         
         # 1. Go to Upload Page
         log("1️⃣ Navigating to TikTok upload page...")
-        page.goto("https://www.tiktok.com/upload?lang=en", timeout=120000)
+        try:
+            # wait_until='domcontentloaded' prevents waiting for slow analytics/ads to load
+            page.goto("https://www.tiktok.com/upload?lang=en", timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000) # Small breath after DOM load
+        except Exception as e:
+            log(f"⚠️ Navigation warning (proceeding anyway): {e}")
+
+        # Debug: Take a screenshot of what we see immediately
+        try:
+            page.screenshot(path="debug_upload_init.png")
+            log("📸 Initial page screenshot saved")
+        except: 
+            pass
         
         # Check if login is needed (redirected to login page?)
         # A simple check: wait for iframe or select file button
