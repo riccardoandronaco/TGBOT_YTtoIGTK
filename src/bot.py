@@ -589,7 +589,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         os.remove("debug_upload_fail.png")
                     except Exception as img_e:
                         logger.error(f"Failed to send debug screenshot: {img_e}")
-Menu)"),
+
+        return
+
+async def post_init(application: Application):
+    await application.bot.set_my_commands([
+        BotCommand("start", "Avvia il bot"),
+        BotCommand("fetch", "Cerca nuovo short (Menu)"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche")
     ])
