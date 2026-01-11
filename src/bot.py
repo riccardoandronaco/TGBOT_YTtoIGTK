@@ -86,8 +86,9 @@ async def _fetch_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, platf
             await message.reply_text(f"Nessun nuovo video trovato per {platform_filter or 'tutte le piattaforme'}.")
             return
 
-        # Store URL in user_data
+        # Store URL in user_data and the current fetch mode
         context.user_data['found_url'] = video_url
+        context.user_data['fetch_mode'] = platform_filter # None, 'instagram', or 'tiktok'
 
         # Create button to confirm download
         keyboard = [
@@ -353,14 +354,26 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == 'skip_found':
         url = context.user_data.get('found_url')
+        fetch_mode = context.user_data.get('fetch_mode') # 'instagram', 'tiktok', or None
+        
         if url:
             # Extract ID
             match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", url)
             if match:
                 vid = match.group(1)
-                history_handler.add(vid, "skipped")
-                await query.edit_message_text("Video saltato. Cerco il prossimo...")
-                await fetch_next_short(update, context)
+                
+                # Intelligent skip logic
+                skip_target = "skipped" # Default
+                if fetch_mode == 'instagram':
+                    skip_target = "instagram"
+                elif fetch_mode == 'tiktok':
+                    skip_target = "tiktok"
+                
+                history_handler.add(vid, skip_target)
+                
+                target_msg = skip_target if skip_target != 'skipped' else 'generale'
+                await query.edit_message_text(f"Video aggiunto a history {target_msg}. Cerco il prossimo...")
+                await _fetch_logic(update, context, fetch_mode)
                 return
 
         await query.edit_message_text("Operazione annullata. Usa /fetch per cercare di nuovo.")
