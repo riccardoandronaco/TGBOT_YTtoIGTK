@@ -226,22 +226,44 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
             for i in range(30): # Wait up to 60 seconds
                 if post_btn.is_enabled():
+                    log("✅ Post button enabled.")
                     break
+                
+                # Check if it looks enabled visually/by class? 
+                # Sometimes is_enabled() is strict about 'disabled' attribute but TikTok uses classes
+                # We can try to assume it's ready if we waited enough
+                if i > 10: 
+                     # After 20 seconds, try to verify if it's actually clickable?
+                     pass
+                
                 time.sleep(2)
             
+            # Even if Playwright thinks it's disabled, if it's red/visible it might be clickable via JS.
+            # We try to proceed to clicking logic regardless, but with a warning.
             if not post_btn.is_enabled():
-                log("❌ Post button never enabled (Timeout). Analysis might be stuck.")
-                page.screenshot(path="debug_post_disabled.png")
-                browser.close()
-                return False
+                log("⚠️ Post button reported disabled by Playwright. Attempting Force-Click...")
+                # We don't return False immediately anymore. We fall through to the click attempt.
+                # Take a debug screenshot strictly for context, but don't abort yet.
+                page.screenshot(path="debug_post_disabled_warning.png")
 
             log("5️⃣ Clicking Post...")
             # Retry click mechanism
             clicked_success = False
             for attempt in range(3):
-                post_btn.click()
-                time.sleep(3)
-                # Check if "Post now" modal appeared
+                try:
+                    # Prefer JS click to bypass overlays or 'disabled' checks
+                    post_btn.evaluate("node => node.click()")
+                    log(f"   Click attempt {attempt+1} (JS)...")
+                except Exception as click_err:
+                    log(f"   JS Click failed, trying standard click: {click_err}")
+                    try:
+                        post_btn.click(force=True)
+                    except Exception as e2:
+                        log(f"   Standard click failed: {e2}")
+
+                time.sleep(5)
+                
+                # Check for "Post now" modal (sometimes appears)
                 if page.locator('button:has-text("Post now")').is_visible():
                      log("⚠️ 'Post now' modal detected immediately.")
                      break
