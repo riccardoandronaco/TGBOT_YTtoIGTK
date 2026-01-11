@@ -117,6 +117,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Gestisci Instagram Playlist", callback_data='hist_view_instagram')],
         [InlineKeyboardButton("Gestisci TikTok Playlist", callback_data='hist_view_tiktok')],
+        [InlineKeyboardButton("Gestisci Skipped Playlist", callback_data='hist_view_skipped')],
     ]
     await update.message.reply_text("📂 **Gestione Storico**\nScegli la piattaforma per vedere gli ultimi video processati e eventualmente rimuoverli:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 

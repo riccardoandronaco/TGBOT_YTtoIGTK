@@ -86,14 +86,15 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
     
     with sync_playwright() as p:
         # Launch browser with Linux-optimized args
+        # Removing --disable-gpu as it might interfere with TikTok's heavy JS/Canvas
+        # Removing --no-sandbox might be safer if running as root, but usually needed on Docker/RPi. 
+        # Keeping no-sandbox but enabling GPU might help rendering.
         browser = p.chromium.launch(
             headless=headless, 
             args=[
                 "--start-maximized", 
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox", 
-                "--disable-setuid-sandbox",
-                "--disable-gpu" 
             ]
         )
         
@@ -126,9 +127,13 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # 1. Go to Upload Page
         log("1️⃣ Navigating to TikTok upload page...")
         try:
-            # wait_until='domcontentloaded' prevents waiting for slow analytics/ads to load
-            page.goto("https://www.tiktok.com/upload?lang=en", timeout=60000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000) # Small breath after DOM load
+            # Reverting to default load strategy (wait for 'load' event)
+            # 'domcontentloaded' was too risky, causing premature interaction.
+            page.goto("https://www.tiktok.com/upload?lang=en", timeout=90000)
+            
+            # Additional small wait to ensure JS is hydrated
+            time.sleep(5)
+            
         except Exception as e:
             log(f"⚠️ Navigation warning (proceeding anyway): {e}")
 
@@ -231,7 +236,20 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 return False
 
             log("5️⃣ Clicking Post...")
-            post_btn.click()
+            # Retry click mechanism
+            clicked_success = False
+            for attempt in range(3):
+                post_btn.click()
+                time.sleep(3)
+                # Check if "Post now" modal appeared
+                if page.locator('button:has-text("Post now")').is_visible():
+                     log("⚠️ 'Post now' modal detected immediately.")
+                     break
+                # Check if we moved to success page
+                if "Manage your posts" in page.content() or "uploaded" in page.content():
+                    clicked_success = True
+                    break
+                log(f"🔄 Clicked Post (Attempt {attempt+1}), checking response...")
             
             # 5. Handle "Continue to post?" Modal (Content check)
             # This modal appears if TikTok is still checking the video but allows posting anyway.
