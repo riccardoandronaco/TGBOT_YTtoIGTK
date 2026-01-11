@@ -590,6 +590,22 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as img_e:
                         logger.error(f"Failed to send debug screenshot: {img_e}")
 
+        except Exception as e:
+            logger.error(f"Error uploading to TikTok: {e}")
+            await refresh_keyboard(msg_caption=f"❌ Errore TikTok: {e}")
+            
+            # Send debug screenshot if available
+            if os.path.exists("debug_upload_fail.png"):
+                try:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id, 
+                        photo=open("debug_upload_fail.png", 'rb'),
+                        caption="📸 Screenshot Errore TikTok (Exception)"
+                    )
+                    os.remove("debug_upload_fail.png")
+                except Exception as img_e:
+                    logger.error(f"Failed to send debug screenshot: {img_e}")
+        
         return
 
 async def post_init(application: Application):
@@ -608,30 +624,7 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('fetch', fetch_command
-        return
-
-async def post_init(application: Application):
-    await application.bot.set_my_commands([
-        BotCommand("start", "Avvia il bot"),
-        BotCommand("fetch", "Cerca nuovo short (generale)"),
-        BotCommand("fetch_ig", "Cerca short per Instagram"),
-        BotCommand("fetch_tiktok", "Cerca short per TikTok"),
-        BotCommand("history", "Gestisci storico video"),
-        BotCommand("recap", "Visualizza statistiche")
-    ])
-
-if __name__ == '__main__':
-    if not TELEGRAM_TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN not found in .env")
-        exit(1)
-
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
-
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('fetch', fetch_next_short))
-    application.add_handler(CommandHandler('fetch_ig', fetch_ig))
-    application.add_handler(CommandHandler('fetch_tiktok', fetch_tiktok))
+    application.add_handler(CommandHandler('fetch', fetch_command))
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
