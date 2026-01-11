@@ -48,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("Ciao! Inviami un link di YouTube Short per iniziare, oppure usa /fetch per prendere il prossimo short dal canale.")
 
-async def fetch_next_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _fetch_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, platform_filter=None):
     # Determine the message object to reply to
     if update.message:
         message = update.message
@@ -65,14 +65,22 @@ async def fetch_next_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("URL del canale YouTube non configurato nel file .env")
         return
 
-    await message.reply_text("Sto cercando il prossimo short non pubblicato... (potrebbe richiedere qualche secondo)")
+    filter_msg = f" ({platform_filter})" if platform_filter else ""
+    await message.reply_text(f"Sto cercando il prossimo short non pubblicato{filter_msg}... (potrebbe richiedere qualche secondo)")
 
     try:
         loop = asyncio.get_running_loop()
-        video_url = await loop.run_in_executor(None, yt_handler.get_oldest_unprocessed_video, YOUTUBE_CHANNEL_URL, history_handler)
+        # Pass the platform_filter to the handler
+        video_url = await loop.run_in_executor(
+            None, 
+            yt_handler.get_oldest_unprocessed_video, 
+            YOUTUBE_CHANNEL_URL, 
+            history_handler, 
+            platform_filter
+        )
 
         if not video_url:
-            await message.reply_text("Nessun nuovo video trovato o tutti i video sono già stati processati.")
+            await message.reply_text(f"Nessun nuovo video trovato per {platform_filter or 'tutte le piattaforme'}.")
             return
 
         # Store URL in user_data
@@ -92,6 +100,26 @@ async def fetch_next_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error fetching next short: {e}")
         await message.reply_text(f"Errore durante la ricerca: {e}")
+
+async def fetch_next_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _fetch_logic(update, context, None)
+
+async def fetch_ig(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _fetch_logic(update, context, "instagram")
+
+async def fetch_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _fetch_logic(update, context, "tiktok")
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+        
+    keyboard = [
+        [InlineKeyboardButton("Gestisci Instagram Playlist", callback_data='hist_view_instagram')],
+        [InlineKeyboardButton("Gestisci TikTok Playlist", callback_data='hist_view_tiktok')],
+    ]
+    await update.message.reply_text("📂 **Gestione Storico**\nScegli la piattaforma per vedere gli ultimi video processati e eventualmente rimuoverli:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 async def recap_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
@@ -210,6 +238,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # --- History Management ---
+    if query.data.startswith('hist_view_'):
+        platform = query.data.split('_')[2]
+        recent = history_handler.get_recent(platform, 5)
+        
+        txt = f"📜 **Ultimi 5 video in {platform}:**\n"
+        keyboard = []
+        if not recent:
+            txt += "_Nessun video trovato recentemente._"
+        
+        for vid in recent:
+            txt += f"- `{vid}`\n"
+            keyboard.append([InlineKeyboardButton(f"🗑️ Rimuovi {vid}", callback_data=f"hist_del_{platform}_{vid}")])
+        
+        keyboard.append([InlineKeyboardButton("❌ Chiudi", callback_data="hist_close")])
+        
+        await query.edit_message_text(text=txt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return
+
+    if query.data.startswith('hist_del_'):
+        parts = query.data.split('_')
+        # format: hist_del_platform_vid
+        platform = parts[2]
+        vid = parts[3]
+        
+        if history_handler.remove(vid, platform):
+             await query.answer(f"Video {vid} rimosso da {platform}!")
+             # Refresh view
+             recent = history_handler.get_recent(platform, 5)
+             txt = f"📜 **Ultimi 5 video in {platform}:**\n"
+             keyboard = []
+             if not recent:
+                txt += "_Nessun video trovato recentemente._"
+             for v in recent:
+                txt += f"- `{v}`\n"
+                keyboard.append([InlineKeyboardButton(f"🗑️ Rimuovi {v}", callback_data=f"hist_del_{platform}_{v}")])
+             keyboard.append([InlineKeyboardButton("❌ Chiudi", callback_data="hist_close")])
+             await query.edit_message_text(text=txt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        else:
+            await query.answer("Errore rimozione o già rimosso.")
+        return
+
+    if query.data == 'hist_close':
+        await query.edit_message_text("Operazione completata.")
+        return
+    # --------------------------
 
     # Handle fetch flow buttons
     if query.data == 'download_found':
@@ -483,8 +558,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
-        BotCommand("fetch", "Cerca il prossimo short non pubblicato"),
-        BotCommand("recap", "Visualizza statistiche iscritti/follower")
+        BotCommand("fetch", "Cerca nuovo short (generale)"),
+        BotCommand("fetch_ig", "Cerca short per Instagram"),
+        BotCommand("fetch_tiktok", "Cerca short per TikTok"),
+        BotCommand("history", "Gestisci storico video"),
+        BotCommand("recap", "Visualizza statistiche")
     ])
 
 if __name__ == '__main__':
@@ -496,6 +574,9 @@ if __name__ == '__main__':
 
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('fetch', fetch_next_short))
+    application.add_handler(CommandHandler('fetch_ig', fetch_ig))
+    application.add_handler(CommandHandler('fetch_tiktok', fetch_tiktok))
+    application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))

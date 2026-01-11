@@ -91,10 +91,13 @@ class YouTubeHandler:
             logger.error(f"Error fetching YouTube subs: {e}")
             return "Errore"
 
-    def get_oldest_unprocessed_video(self, channel_url, history_handler):
+    def get_oldest_unprocessed_video(self, channel_url, history_handler, platform_filter=None):
         """
         Fetches the list of videos from the channel, sorts them by date (oldest first),
         and returns the first one that is NOT in the history.
+        
+        platform_filter: 'instagram', 'tiktok', or None.
+        If specified, checks existence only in that platform's history.
         """
         ydl_opts = {
             'extract_flat': True,  # Don't download, just get metadata
@@ -142,11 +145,11 @@ class YouTubeHandler:
                     # Note: flat extraction might not have duration for all entries depending on backend
                     # But if we are in /shorts, we assume they are shorts.
                     
-                    if not history_handler.exists(video_id):
-                        logger.info(f"Found oldest unprocessed video: {title} ({video_id}) - Date: {entry.get('upload_date')}")
+                    if not history_handler.exists(video_id, platform_filter):
+                        logger.info(f"Found oldest unprocessed video (Platform: {platform_filter or 'ANY'}): {title} ({video_id})")
                         return f"https://www.youtube.com/watch?v={video_id}"
                 
-                logger.info("No new videos found.")
+                logger.info(f"No new videos found (Platform filter: {platform_filter}).")
                 return None
 
         except Exception as e:

@@ -10,32 +10,30 @@ class HistoryHandler:
         self._load()
 
     def _load(self):
-        self.data = {"instagram": set(), "tiktok": set(), "skipped": set()}
+        # We use lists to maintain order (historical sequence)
+        self.data = {"instagram": [], "tiktok": [], "skipped": []}
         if os.path.exists(self.file_path):
             try:
                 with open(self.file_path, 'r') as f:
                     content = json.load(f)
-                    # Migration from old list format
                     if isinstance(content, list):
+                        # Migration from legacy list format
                         logger.info("Migrating legacy history format to new dict format.")
-                        self.data["instagram"] = set(content)
-                        # Assume old history means uploaded to IG or processed
+                        self.data["instagram"] = list(content)
+                        self.data["skipped"] = list(content)
                     elif isinstance(content, dict):
-                        self.data["instagram"] = set(content.get("instagram", []))
-                        self.data["tiktok"] = set(content.get("tiktok", []))
-                        self.data["skipped"] = set(content.get("skipped", []))
+                        # Ensure everything is a list
+                        self.data["instagram"] = list(content.get("instagram", []))
+                        self.data["tiktok"] = list(content.get("tiktok", []))
+                        self.data["skipped"] = list(content.get("skipped", []))
             except Exception as e:
                 logger.error(f"Error loading history: {e}")
 
     def save(self):
         try:
-            export_data = {
-                "instagram": list(self.data["instagram"]),
-                "tiktok": list(self.data["tiktok"]),
-                "skipped": list(self.data["skipped"])
-            }
+            # Data is already in list format
             with open(self.file_path, 'w') as f:
-                json.dump(export_data, f)
+                json.dump(self.data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving history: {e}")
 
@@ -44,35 +42,38 @@ class HistoryHandler:
         platform: 'instagram', 'tiktok', or 'skipped'
         """
         if platform in self.data:
-            self.data[platform].add(video_id)
-            self.save()
+            if video_id not in self.data[platform]:
+                self.data[platform].append(video_id)
+                self.save()
         else:
             logger.error(f"Unknown platform for history: {platform}")
 
     def exists(self, video_id, platform=None):
         """
-        If platform is None, checks if it is skipped OR present in ANY platform (legacy support for yt_handler).
-        If platform is specified, checks specific list.
+        Check if video_id exists. 
+        If platform is specified, checks only that list.
+        If platform is None, checks if processed at all (in IG OR TT OR Skipped).
         """
         if platform:
-            return video_id in self.data.get(platform, set())
-        
-        # Default behavior for yt_handler: return True if we should stop processing it.
-        # If it's explicitly skipped, it's processed.
-        # If it's in IG AND TikTok, it's fully processed.
-        # NOTE: For now, avoiding re-downloading things we already touched.
-        # If it is in EITHER history, we consider it "touched" for the purpose of "oldest_unprocessed"?
-        # No, the user might want to upload to TikTok something that is only on IG.
-        # BUT yt_handler usually filters out stuff. 
-        # Let's say: It exists if it is in 'skipped'.
-        # Or if it is in BOTH IG and TikTok.
-        
-        # User request: "Tieni uno storico di IG e uno per Tiktok".
-        # If I change this return value to `return video_id in self.data['instagram']`, 
-        # then `fetch` will skip everything posted to IG. 
-        # If I use `fetch`, I want new videos.
-        
-        # Let's define "exists" (processed) as: present in IG (since user said IG history is good).
-        # This prevents re-downloading old stuff.
-        return (video_id in self.data["instagram"]) or (video_id in self.data["skipped"])
+            return video_id in self.data.get(platform, [])
+        else:
+            # Check if it exists in ANY list
+            return (video_id in self.data["instagram"] or 
+                    video_id in self.data["tiktok"] or 
+                    video_id in self.data["skipped"])
+
+    def remove(self, video_id, platform):
+        """Removes a video_id from a specific platform history"""
+        if platform in self.data:
+            if video_id in self.data[platform]:
+                self.data[platform].remove(video_id)
+                self.save()
+                return True
+        return False
+
+    def get_recent(self, platform, limit=5):
+        """Returns the last N items for a platform (reversed order: newest first)"""
+        if platform in self.data and self.data[platform]:
+            return self.data[platform][-limit:][::-1]
+        return []
 
