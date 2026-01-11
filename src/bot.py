@@ -220,14 +220,24 @@ import re
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
+        # Optional: log unauthorized access attempts
+        # logger.warning(f"Unauthorized access attempt from {update.effective_user.id}")
         return
 
     text = update.message.text
-    # Extract URL using regex to handle shared text like "Check this out https://youtu.be/..."
-    url_match = re.search(r'(https?://(?:www\.)?(?:youtube\.com/|youtu\.be/)[\w\-\./\?=&]+)', text)
+    logger.info(f"Received message: {text}")
+    
+    # Improved Regex to capture m.youtube.com, music.youtube.com, shorts, etc.
+    # Matches http/https, optional www/m/music subdomain, youtube.com or youtu.be, and then the path
+    url_match = re.search(r'(https?://(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com|youtu\.be)/[\w\-\./\?=&]+)', text)
     
     if not url_match:
-        await update.message.reply_text("Non ho trovato un link YouTube valido nel messaggio.")
+        # If text is not a command and has no link, we might want to ignore it or facilitate debugging
+        logger.info("No valid YouTube link found in message.")
+        # Only reply if the user sent something that LOOKS like a link or is asking for help, 
+        # otherwise we might annoy them if they are just chatting (though a bot usually doesn't chat).
+        if "http" in text:
+             await update.message.reply_text("Non ho trovato un link YouTube valido nel messaggio (supporto solo youtube.com e youtu.be).")
         return
 
     url = url_match.group(0)
