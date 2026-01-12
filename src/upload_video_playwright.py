@@ -122,7 +122,10 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             args=[
                 "--start-maximized", 
                 "--disable-blink-features=AutomationControlled",
-                "--no-sandbox", 
+                "--no-sandbox",
+                "--disable-dev-shm-usage", # Prevent memory crashes on RPi
+                "--disable-gpu",           # Help with white screens in headless
+                "--window-size=1920,1080"
             ]
         )
         
@@ -132,8 +135,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # UA: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
         context = browser.new_context(
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            # viewport={'width': 1920, 'height': 1080} # Let it be responsive or maximized
-            viewport=None
+            viewport={'width': 1920, 'height': 1080},
+            device_scale_factor=1,
         )
         
         # Load Cookies
@@ -199,7 +202,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Additional small wait to ensure JS is hydrated
             time.sleep(5)
             path_1 = take_screenshot(page, "1_upload_page.png")
-            log("   Upload page loaded.")
+            log(f"   Upload page loaded. Title: {page.title()}")
             
         except Exception as e:
             log(f"⚠️ Navigation warning (proceeding anyway): {e}")
@@ -231,13 +234,13 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                      upload_btn.click()
                      # Wait again
                      time.sleep(5)
-                     page.wait_for_selector('iframe, input[type="file"]', timeout=30000)
+                     page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=60000)
                  else:
                      # Check if we are just stuck loading (Spinner)
                      # If so, a reload might help
                      log("   No Upload button found. Trying Page Reload...")
                      page.reload()
-                     page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
+                     page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=60000)
                      
              except Exception as manual_nav_e:
                  log(f"   Fallback navigation/reload failed: {manual_nav_e}")
