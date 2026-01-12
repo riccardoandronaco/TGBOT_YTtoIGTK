@@ -549,48 +549,52 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await query.edit_message_caption(caption="2/2 🎵 Pubblicazione su TikTok...\n(Attendi avanzamento)")
                 
-                # Callback to update message
-                def progress_callback(status_text):
+                # Setup specific folder for screenshots of this session
+                debug_dir = os.path.join(os.getcwd(), "debug_screens")
+                os.makedirs(debug_dir, exist_ok=True)
+                # clear old screenshots
+                for f in os.listdir(debug_dir):
+                    os.remove(os.path.join(debug_dir, f))
+
+                # Callback to update message and send screenshots
+                def progress_callback(status_text, screenshot_path=None):
                      future = asyncio.run_coroutine_threadsafe(
-                        query.edit_message_caption(caption=f"2/2 🎵 Pubblicazione su TikTok...\n📝 {status_text}"),
+                        _update_ui_with_screenshot(query, loop, status_text, screenshot_path),
                         loop
                      )
                      try:
-                         future.result(timeout=1)
+                         future.result(timeout=2)
                      except:
                          pass
 
+                # Async helper to handle UI updates + potential photo sending
+                async def _update_ui_with_screenshot(q, l, text, img_path):
+                     try:
+                         await q.edit_message_caption(caption=f"2/2 🎵 TikTok...\n📝 {text}")
+                         if img_path and os.path.exists(img_path):
+                             with open(img_path, 'rb') as photo:
+                                 await context.bot.send_photo(chat_id=q.message.chat_id, photo=photo, caption=f"📸 {text}")
+                     except Exception as e:
+                         pass
+
                 result = await loop.run_in_executor(None, lambda: tiktok_handler.upload_video(path, caption, status_callback=progress_callback))
-                if result:
+                
+                # Unpack result tuple or handle boolean legacy
+                if isinstance(result, tuple):
+                    success, msg = result
+                else:
+                    success = result
+                    msg = "Unknown"
+
+                if success:
                     history_handler.add(video_id, "tiktok")
                 else:
-                    errors.append("TikTok: Upload fallito/non confermato")
-                    # Check for debug screenshot
-                    if os.path.exists("debug_upload_fail.png"):
-                        try:
-                            await context.bot.send_photo(
-                                chat_id=update.effective_chat.id, 
-                                photo=open("debug_upload_fail.png", 'rb'),
-                                caption="📸 Screenshot Fallimento TikTok"
-                            )
-                            os.remove("debug_upload_fail.png")
-                        except Exception as img_e:
-                            logger.error(f"Failed to send debug screenshot: {img_e}")
+                    errors.append(f"TikTok: Upload fallito ({msg})")
 
             except Exception as e:
                 logger.error(f"Error uploading to TikTok: {e}")
                 errors.append(f"TikTok: {e}")
-                # Check for debug screenshot on exception
-                if os.path.exists("debug_upload_fail.png"):
-                    try:
-                        await context.bot.send_photo(
-                            chat_id=update.effective_chat.id, 
-                            photo=open("debug_upload_fail.png", 'rb'),
-                            caption="📸 Screenshot Errore TikTok"
-                        )
-                        os.remove("debug_upload_fail.png")
-                    except Exception as img_e:
-                        logger.error(f"Failed to send debug screenshot: {img_e}")
+
 
         # Final Status
         if not errors:

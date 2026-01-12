@@ -69,15 +69,33 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
     """
     Robust upload using Playwright.
     """
-    def log(msg):
+    def log(msg, screenshot_path=None):
         logger.info(msg)
         if status_callback:
             try:
-                status_callback(msg)
+                # If screenshot_path provided, we just pass checking os.exists
+                status_callback(msg, screenshot_path)
+            except TypeError:
+                # Fallback for old status_callbacks that only take 1 arg
+                try:
+                    status_callback(msg)
+                except: pass
             except:
                 pass
 
     log(f"Starting Playwright upload for {video_path}")
+    
+    # helper for saving progress screenshot
+    def take_screenshot(p, name):
+         try:
+             # Ensure directory exists
+             debug_dir = os.path.join(os.getcwd(), "debug_screens")
+             os.makedirs(debug_dir, exist_ok=True)
+             path = os.path.join(debug_dir, name)
+             p.screenshot(path=path)
+             return path
+         except:
+             return None
     
     # Ensure absolute path for video (browsers need it)
     video_path = os.path.abspath(video_path)
@@ -133,13 +151,16 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             time.sleep(5) # Wait for hydration
             content = page.content()
             
+            # screen
+            path_0 = take_screenshot(page, "0_profile_init.png")
+            
             # Regex for video count
             match = re.search(r'"videoCount":(\d+)', content)
             if match:
                 initial_video_count = int(match.group(1))
-                log(f"   Initial Video Count: {initial_video_count}")
+                log(f"   Initial Video Count: {initial_video_count}", path_0)
             else:
-                log("   Could not determine initial video count (Regex failed).")
+                log("   Could not determine initial video count (Regex failed).", path_0)
         except Exception as e:
             log(f"   Skipping initial count check: {e}")
         
@@ -152,14 +173,17 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
             # Additional small wait to ensure JS is hydrated
             time.sleep(5)
+            path_1 = take_screenshot(page, "1_upload_page.png")
+            log("   Upload page loaded.", path_1)
             
         except Exception as e:
             log(f"⚠️ Navigation warning (proceeding anyway): {e}")
 
         # Debug: Take a screenshot of what we see immediately
         try:
-            page.screenshot(path="debug_upload_init.png")
-            log("📸 Initial page screenshot saved")
+            # page.screenshot(path="debug_upload_init.png") # Superseded by path_1
+            # log("📸 Initial page screenshot saved")
+            pass
         except: 
             pass
         
@@ -169,7 +193,14 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Wait for file input or iframe
             page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
         except:
-             log("⚠️ Upload page check timeout - might be stuck or logged out.")
+             path_err = take_screenshot(page, "err_upload_check.png")
+             log("⚠️ Upload page check timeout - might be stuck or logged out.", path_err) 
+             
+             # Check Login Button presence
+             if page.locator('button:has-text("Log in")').is_visible():
+                  log("❌ Redirected to Login Page!", path_err)
+                  browser.close()
+                  return False, "Login Redirect detected"
 
         # Handle 'Select File'
         # TikTok upload often is an input[type="file"] hidden or inside an iframe
@@ -186,24 +217,24 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # Try finding the input in main page or frame
         file_input = upload_frame.locator('input[type="file"]')
         
-        # if file_input.count() == 0:
-             # Fallback: Maybe we need to click "Select file" which triggers the hidden input
-             # logger.info("Direct file input not found, looking for buttons...")
-             # This is tricky without visual execution, but usually file input is there just hidden.
-        
         log("2️⃣ Uploading file...")
         try:
             file_input.set_input_files(video_path)
+            # Wait a sec for upload interface to react
+            time.sleep(5)
+            path_2 = take_screenshot(page, "2_file_selected.png")
+            log("   File set in input.", path_2)
+            
         except Exception as e:
             logger.error(f"Failed to set input file: {e}")
+            path_err = take_screenshot(page, "err_input_file.png")
             # Debug screenshot
-            page.screenshot(path="debug_upload_fail.png")
             browser.close()
-            return False
+            return (False, f"Input Set Failed: {e}")
             
         # Wait for upload to complete (Look for "Uploaded" text or progress bar change)
         # Usually looking for the 'Caption' text box appearing is a good sign the previous step worked
-        log("3️⃣ Waiting for processing...")
+        log("3️⃣ Waiting for processing (Caption area)...")
         
         # Wait for the editor container or caption input
         # The caption editor is inside a div with 'DraftEditor' usually
@@ -224,6 +255,9 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Type slowly or paste
             page.keyboard.type(caption)
             time.sleep(1)
+            
+            path_3 = take_screenshot(page, "3_caption_set.png")
+            log("   Caption set.", path_3)
             
             # Handle Copyright checks / Compliance if they appear?
             # Usually they are passive.
@@ -263,7 +297,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 log("⚠️ Post button reported disabled by Playwright. Attempting Force-Click...")
                 # We don't return False immediately anymore. We fall through to the click attempt.
                 # Take a debug screenshot strictly for context, but don't abort yet.
-                page.screenshot(path="debug_post_disabled_warning.png")
+                path_warn = take_screenshot(page, "warn_post_disabled.png")
 
             log("5️⃣ Clicking Post...")
             # Retry click mechanism
@@ -287,13 +321,16 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 if page.locator('button:has-text("Post now")').is_visible() or \
                    page.locator('button:has-text("Pubblica ora")').is_visible():
                      log("⚠️ 'Post now' modal detected immediately.")
+                     path_mod = take_screenshot(page, "modal_detected.png") 
                      break
 
                 # Check if we moved to success page
                 if "Manage your posts" in page.content() or "uploaded" in page.content():
                     clicked_success = True
                     break
-                log(f"🔄 Clicked Post (Attempt {attempt+1}), checking response...")
+                
+                path_att = take_screenshot(page, f"click_attempt_{attempt+1}.png")
+                log(f"🔄 Clicked Post (Attempt {attempt+1}), checking response...", path_att)
             
             # 5. Handle "Continue to post?" Modal (Content check)
             # This modal appears if TikTok is still checking the video but allows posting anyway.
@@ -314,6 +351,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                      if b.count() > 0 and b.is_visible():
                          found_modal_btn = b
                          log(f"⚠️ Content check modal detected (Main Page - {sel}). Clicking...")
+                         path_mod2 = take_screenshot(page, "modal_main.png")
                          break
                 
                 # Check Iframe if not found
@@ -323,6 +361,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                          if b.count() > 0 and b.is_visible():
                              found_modal_btn = b
                              log(f"⚠️ Content check modal detected (Frame - {sel}). Clicking...")
+                             take_screenshot(page, "modal_frame.png")
                              break
                 
                 if found_modal_btn:
@@ -345,7 +384,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             try:
                 # Primary success check
                 upload_frame.wait_for_selector('text=Manage your posts', timeout=30000)
-                log("✅ Upload confirmed (found 'Manage your posts')!")
+                path_succ = take_screenshot(page, "success_page.png")
+                log("✅ Upload confirmed (found 'Manage your posts')!", path_succ)
                 success = True
                 msg = "Uploaded successfully"
             except:
@@ -357,7 +397,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 # Check for "Post published" toast or similar strictly
                 if page.locator('div:has-text("Post published")').count() > 0 or \
                    upload_frame.locator('div:has-text("Post published")').count() > 0:
-                     log("✅ Found 'Post published' toast.")
+                     path_toast = take_screenshot(page, "toast_success.png")
+                     log("✅ Found 'Post published' toast.", path_toast)
                      success = True
                      msg = "Uploaded (Toast confirmed)"
                 
@@ -380,7 +421,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                             page.goto("https://www.tiktok.com/profile", wait_until='domcontentloaded')
                             # Wait for post list
                             try:
-                                page.wait_for_selector('[data-e2e="user-post-item"]', timeout=15000)
+                                page.wait_for_selector('[data-e2e="user-post-item"]', timeout=30000)
                             except:
                                 pass # Maybe no posts or slow load
                             
@@ -391,8 +432,10 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                             clean_caption = caption.replace("\n", " ").strip()
                             search_chunk = clean_caption[:30] 
                             
+                            path_ver = take_screenshot(page, "verify_profile_end.png")
+                            
                             if search_chunk in page_content:
-                                log(f"✅ Found video text '{search_chunk}' in profile.")
+                                log(f"✅ Found video text '{search_chunk}' in profile.", path_ver)
                                 success = True
                                 msg = "Uploaded (Verified on Profile)"
                             
@@ -403,25 +446,26 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                                     new_count = int(match_new.group(1))
                                     log(f"   Old Count: {initial_video_count}, New Count: {new_count}")
                                     if new_count > initial_video_count:
-                                        log("✅ Video count increased!")
+                                        log("✅ Video count increased!", path_ver)
                                         success = True
                                         msg = "Uploaded (Count Increased)"
                                     else:
-                                        log(f"❌ Video count did not increase.")
+                                        log(f"❌ Video count did not increase.", path_ver)
                                 else:
-                                    log("⚠️ Could not read new video count.")
+                                    log("⚠️ Could not read new video count.", path_ver)
                             
                             if not success:
                                 log(f"❌ Verification failed (Text not found & Count not increased).")
-                                page.screenshot(path="debug_profile_check.png")
+                                # page.screenshot(path="debug_profile_check.png") # superseded
                                 msg = "Upload Verify Failed (Profile)"
 
                         except Exception as prof_e:
                             log(f"⚠️ Profile verification failed/timed out: {prof_e}")
-                            page.screenshot(path="debug_profile_check_error.png")
+                            take_screenshot(page, "err_verify_profile.png")
                             msg = "Upload Verify Error"
                     
                     else:
+                        take_screenshot(page, "stuck_on_upload.png")
                         log("⚠️ Still on upload page. Checking for Drafts...")
                     
                         # Draft Fallback
@@ -450,7 +494,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                         
                         if not draft_clicked:
                             log("❌ Post verification failed AND No Draft option found.")
-                            page.screenshot(path="debug_upload_failed_final.png")
+                            take_screenshot(page, "err_final_fail.png")
                             success = False
                             msg = "Upload Verify Failed & No Draft"
             
@@ -459,12 +503,12 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
 
         except Exception as e:
             logger.error(f"Error during upload workflow: {e}")
-            page.screenshot(path="debug_upload_fail.png")
+            path_crit = take_screenshot(page, "critical_error.png")
             try:
                 browser.close()
             except:
                 pass
-            return (False, str(e))
+            return (False, f"Exception: {e}")
 
 if __name__ == "__main__":
     # Test run
