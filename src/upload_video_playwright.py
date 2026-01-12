@@ -93,6 +93,15 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
              os.makedirs(debug_dir, exist_ok=True)
              path = os.path.join(debug_dir, name)
              p.screenshot(path=path)
+             
+             # PRO DEBUG: Dump HTML structure if it's an error
+             if "err" in name or "warn" in name or "fail" in name:
+                 try:
+                     html_path = path.replace(".png", ".html")
+                     with open(html_path, "w", encoding="utf-8") as f:
+                         f.write(p.content())
+                 except: pass # Ignore html dump fail
+                 
              return path
          except:
              return None
@@ -138,6 +147,22 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             log("⚠️ No TikTok cookies found! Login will likely fail.")
 
         page = context.new_page()
+        
+        # --- PRO DEBUG LINSTENERS ---
+        # 1. Listen for Console Logs (detect JS errors on page)
+        page.on("console", lambda msg: logger.info(f"🕸️ BROWSER CONSOLE ({msg.type}): {msg.text}") if msg.type == "error" else None)
+        
+        # 2. Listen for Page Crashes
+        page.on("pageerror", lambda exc: logger.error(f"🕸️ BROWSER CRASH: {exc}"))
+        
+        # 3. Network Monitor (Detect 403 Forbidden / 5xx Errors indicating blocking)
+        def handle_response(response):
+            try:
+                if response.status >= 400 and "tiktok.com" in response.url:
+                    logger.warning(f"🕸️ NET ERROR {response.status}: {response.url}")
+            except: pass
+        page.on("response", handle_response)
+        # ----------------------------
         
         # Raspberry Pi often needs more time due to limited CPU/RAM
         # Increasing default timeout to 120 seconds
@@ -193,8 +218,31 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Wait for file input or iframe
             page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
         except:
+             path_timeout = take_screenshot(page, "warn_upload_timeout.png")
+             log("⚠️ Upload page check timeout. Trying fallback navigation...", path_timeout)
+             
+             # Fallback: Trying to click the "Upload" button in header if we are stuck on homepage/loading
+             # Screenshot shows an "Upload" button (usually + Upload)
+             try:
+                 upload_btn = page.locator('a[href*="/upload"], button:has-text("Upload")').first
+                 if upload_btn.is_visible():
+                     log("   Found 'Upload' button in header. Clicking...", path_timeout)
+                     upload_btn.click()
+                     # Wait again
+                     time.sleep(5)
+                     page.wait_for_selector('iframe, input[type="file"]', timeout=30000)
+                 else:
+                     # Check if we are just stuck loading (Spinner)
+                     # If so, a reload might help
+                     log("   No Upload button found. Trying Page Reload...")
+                     page.reload()
+                     page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
+                     
+             except Exception as manual_nav_e:
+                 log(f"   Fallback navigation/reload failed: {manual_nav_e}")
+
              path_err = take_screenshot(page, "err_upload_check.png")
-             log("⚠️ Upload page check timeout - might be stuck or logged out.", path_err) 
+             log("⚠️ Final check before abort.", path_err) 
              
              # Check Login Button presence
              if page.locator('button:has-text("Log in")').is_visible():
@@ -216,6 +264,12 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         
         # Try finding the input in main page or frame
         file_input = upload_frame.locator('input[type="file"]')
+        
+        # STRICT CHECK: If input isn't there, don't crash in set_input_files
+        if file_input.count() == 0:
+            log("❌ File input selector not found after all retries.", take_screenshot(page, "err_no_input.png"))
+            browser.close()
+            return False, "Upload Form not found (Spinner/Timeout)"
         
         log("2️⃣ Uploading file...")
         try:
