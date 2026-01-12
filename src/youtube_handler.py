@@ -19,6 +19,7 @@ class YouTubeHandler:
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': os.path.join(self.download_path, '%(id)s.%(ext)s'),
+            'restrictfilenames': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),

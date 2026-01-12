@@ -3,6 +3,7 @@ import os
 import pickle
 import time
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,24 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # Raspberry Pi often needs more time due to limited CPU/RAM
         # Increasing default timeout to 120 seconds
         page.set_default_timeout(120000)
+
+        # 0. Check pre-upload video count to verify later
+        initial_video_count = -1
+        log("0️⃣ Checking initial video count...")
+        try:
+            page.goto("https://www.tiktok.com/profile", timeout=60000)
+            time.sleep(5) # Wait for hydration
+            content = page.content()
+            
+            # Regex for video count
+            match = re.search(r'"videoCount":(\d+)', content)
+            if match:
+                initial_video_count = int(match.group(1))
+                log(f"   Initial Video Count: {initial_video_count}")
+            else:
+                log("   Could not determine initial video count (Regex failed).")
+        except Exception as e:
+            log(f"   Skipping initial count check: {e}")
         
         # 1. Go to Upload Page
         log("1️⃣ Navigating to TikTok upload page...")
@@ -311,43 +330,110 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 success = True
                 msg = "Uploaded successfully"
             except:
-                # Try alternatives
-                if "uploaded" in page.content().lower():
-                    log("✅ Upload likely successful (found 'uploaded' text).")
-                    success = True
-                    msg = "Uploaded (text confirmed)"
+                # Primary success failed. 
+                # DANGEROUS: Do NOT trust generic "uploaded" text as it appears in the header "Upload video"
+                
+                log("⚠️ 'Manage your posts' not found. Checking strict alternatives...")
+                
+                # Check for "Post published" toast or similar strictly
+                if page.locator('div:has-text("Post published")').count() > 0 or \
+                   upload_frame.locator('div:has-text("Post published")').count() > 0:
+                     log("✅ Found 'Post published' toast.")
+                     success = True
+                     msg = "Uploaded (Toast confirmed)"
+                
+                # Check for Profile verification (Requested by User)
+                # Only if we suspect it might have worked (e.g. page changed) or specific request
+                # To be safe, if we didn't see the Toast, we should verify on profile if we are NOT on the upload page anymore
                 else:
-                    log("⚠️ Could not confirm success. checking for Drafts...")
+                    # Check if we are still on the upload form
+                    is_still_uploading = False
+                    try:
+                         if upload_frame.locator('button:has-text("Post")').is_visible():
+                             is_still_uploading = True
+                    except: 
+                        pass
                     
-                    # Draft Fallback
-                    # Try to find a button with "Draft" text (e.g. "Save as draft")
-                    # Heuristic search for buttons containing "Draft"
-                    draft_locators = [
-                        'button:has-text("Draft")',
-                        'div[role="button"]:has-text("Draft")', 
-                        'span:has-text("Save as draft")'
-                    ]
-                    
-                    draft_clicked = False
-                    for sel in draft_locators:
-                        d_btn = upload_frame.locator(sel).first
-                        if d_btn.count() > 0 and d_btn.is_visible():
-                            log(f"found Draft button ({sel}). Clicking...")
+                    if not is_still_uploading:
+                        log("📍 Page changed but no confirmation. Verifying on Profile...")
+                        try:
+                            # Go to profile to verify
+                            page.goto("https://www.tiktok.com/profile", wait_until='domcontentloaded')
+                            # Wait for post list
                             try:
-                                d_btn.click()
-                                time.sleep(3)
+                                page.wait_for_selector('[data-e2e="user-post-item"]', timeout=15000)
+                            except:
+                                pass # Maybe no posts or slow load
+                            
+                            # Get new content
+                            page_content = page.content()
+
+                            # method A: Check Caption
+                            clean_caption = caption.replace("\n", " ").strip()
+                            search_chunk = clean_caption[:30] 
+                            
+                            if search_chunk in page_content:
+                                log(f"✅ Found video text '{search_chunk}' in profile.")
                                 success = True
-                                msg = "Saved as Draft (Post failed)"
-                                draft_clicked = True
-                                break
-                            except Exception as de:
-                                log(f"Failed to click Draft: {de}")
+                                msg = "Uploaded (Verified on Profile)"
+                            
+                            # Method B: Check Video Count
+                            elif initial_video_count != -1:
+                                match_new = re.search(r'"videoCount":(\d+)', page_content)
+                                if match_new:
+                                    new_count = int(match_new.group(1))
+                                    log(f"   Old Count: {initial_video_count}, New Count: {new_count}")
+                                    if new_count > initial_video_count:
+                                        log("✅ Video count increased!")
+                                        success = True
+                                        msg = "Uploaded (Count Increased)"
+                                    else:
+                                        log(f"❌ Video count did not increase.")
+                                else:
+                                    log("⚠️ Could not read new video count.")
+                            
+                            if not success:
+                                log(f"❌ Verification failed (Text not found & Count not increased).")
+                                page.screenshot(path="debug_profile_check.png")
+                                msg = "Upload Verify Failed (Profile)"
+
+                        except Exception as prof_e:
+                            log(f"⚠️ Profile verification failed/timed out: {prof_e}")
+                            page.screenshot(path="debug_profile_check_error.png")
+                            msg = "Upload Verify Error"
                     
-                    if not draft_clicked:
-                        log("❌ Post verification failed AND No Draft option found.")
-                        page.screenshot(path="debug_upload_failed_final.png")
-                        success = False
-                        msg = "Upload Verify Failed & No Draft"
+                    else:
+                        log("⚠️ Still on upload page. Checking for Drafts...")
+                    
+                        # Draft Fallback
+                        # Try to find a button with "Draft" text (e.g. "Save as draft")
+                        # Heuristic search for buttons containing "Draft"
+                        draft_locators = [
+                            'button:has-text("Draft")',
+                            'div[role="button"]:has-text("Draft")', 
+                            'span:has-text("Save as draft")'
+                        ]
+                        
+                        draft_clicked = False
+                        for sel in draft_locators:
+                            d_btn = upload_frame.locator(sel).first
+                            if d_btn.count() > 0 and d_btn.is_visible():
+                                log(f"found Draft button ({sel}). Clicking...")
+                                try:
+                                    d_btn.click()
+                                    time.sleep(3)
+                                    success = True
+                                    msg = "Saved as Draft (Post failed)"
+                                    draft_clicked = True
+                                    break
+                                except Exception as de:
+                                    log(f"Failed to click Draft: {de}")
+                        
+                        if not draft_clicked:
+                            log("❌ Post verification failed AND No Draft option found.")
+                            page.screenshot(path="debug_upload_failed_final.png")
+                            success = False
+                            msg = "Upload Verify Failed & No Draft"
             
             browser.close()
             return (success, msg)

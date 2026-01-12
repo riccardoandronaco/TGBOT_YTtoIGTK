@@ -439,9 +439,30 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("Salta / Prossimo", callback_data='skip'),
             InlineKeyboardButton("Annulla", callback_data='cancel')
         ])
+        keyboard.append([InlineKeyboardButton("📥 Manda QUI (Telegram)", callback_data='send_telegram')])
+        
         await query.edit_message_caption(caption=msg_caption, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+
+    if query.data == 'send_telegram':
+        if path and os.path.exists(path):
+            try:
+                await query.answer("Invio video in corso...")
+                await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=open(path, 'rb'),
+                    caption=f"{context.user_data.get('video_title', '')}\nID: {video_id}",
+                    read_timeout=120, 
+                    write_timeout=120, 
+                    pool_timeout=120
+                )
+            except Exception as e:
+                logger.error(f"Error sending video to telegram: {e}")
+                await query.answer(f"Errore invio: {e}")
+        else:
+            await query.answer("File video non trovato!")
+        return
 
     if query.data == 'upload_both':
         title = context.user_data.get('video_title')
