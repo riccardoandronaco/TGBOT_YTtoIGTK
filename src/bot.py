@@ -181,10 +181,14 @@ async def process_video_url(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         video_info = await loop.run_in_executor(None, yt_handler.download_video, url)
         
         # Store info in user_data context
-        context.user_data['video_path'] = video_info['path']
+        video_path = video_info['path']
+        context.user_data['video_path'] = video_path
         context.user_data['video_title'] = video_info['title']
         context.user_data['video_description'] = video_info['description']
         context.user_data['video_id'] = video_info['id'] # Store ID for history
+        
+        is_cached = video_info.get('is_cached', False)
+        thumbnail_url = video_info.get('thumbnail')
 
         # Check existing history to format buttons
         is_on_ig = history_handler.exists(video_info['id'], "instagram")
@@ -194,28 +198,50 @@ async def process_video_url(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         tt_label = "✅ Su TikTok" if is_on_tiktok else "Pubblica su TikTok"
 
         # Create buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("🚀 Pubblica su TUTTI (IG & TikTok)", callback_data='upload_both')
-            ],
-            [
-                InlineKeyboardButton(ig_label, callback_data='upload_ig'),
-                InlineKeyboardButton(tt_label, callback_data='upload_tiktok')
-            ],
-            [
-                InlineKeyboardButton("Salta / Prossimo", callback_data='skip'),
-                InlineKeyboardButton("Annulla", callback_data='cancel')
-            ]
-        ]
+        keyboard = []
+        
+        if not (is_on_ig and is_on_tiktok):
+             keyboard.append([InlineKeyboardButton("🚀 Pubblica su TUTTI (IG & TikTok)", callback_data='upload_both')])
+             
+        keyboard.append([
+            InlineKeyboardButton(ig_label, callback_data='upload_ig'),
+            InlineKeyboardButton(tt_label, callback_data='upload_tiktok')
+        ])
+        keyboard.append([
+            InlineKeyboardButton("Salta / Prossimo", callback_data='skip'),
+            InlineKeyboardButton("Annulla", callback_data='cancel')
+        ])
+        
+        # Always show "Manda QUI" button as requested
+        keyboard.append([InlineKeyboardButton("📥 Manda QUI (Telegram)", callback_data='send_telegram')])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Send video preview
-        with open(video_info['path'], 'rb') as video_file:
-            await message.reply_video(
-                video=video_file,
-                caption=f"Video scaricato: {video_info['title']}\n\nScegli dove pubblicare:",
-                reply_markup=reply_markup
-            )
+        # Logic: If cached, send Photo/Text to save bandwidth. If new, send Video.
+        if is_cached:
+            # Send Photo or Text
+            msg_text = f"💾 **Video CACHED** (Già presente nel server)\nTitle: {video_info['title']}\n\nScegli dove pubblicare \n(o clicca 'Manda QUI' per vederlo):"
+            if thumbnail_url:
+                await message.reply_photo(
+                    photo=thumbnail_url,
+                    caption=msg_text,
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+            else:
+                await message.reply_text(
+                    text=msg_text,
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+        else:
+            # Send video preview (New Download)
+            with open(video_path, 'rb') as video_file:
+                await message.reply_video(
+                    video=video_file,
+                    caption=f"Video scaricato: {video_info['title']}\n\nScegli dove pubblicare:",
+                    reply_markup=reply_markup
+                )
 
     except Exception as e:
         logger.error(f"Error processing link: {e}")
@@ -249,7 +275,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Clean trailing punctuation that might have been captured (like . or , at end of sentence)
     url = url.rstrip('.,;!?')
     
-    await update.message.reply_text(f"Link trovato: {url}\nSto scaricando il video... attendi.")
+    await update.message.reply_text(f"Link trovato: {url}\nSto processando...")
     await process_video_url(update, context, url)
 
 async def show_history_page(query, platform, page):

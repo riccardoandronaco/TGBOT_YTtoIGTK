@@ -282,10 +282,13 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
 
                 time.sleep(5)
                 
-                # Check for "Post now" modal (sometimes appears)
-                if page.locator('button:has-text("Post now")').is_visible():
+                # Check for "Post now" / "Pubblica ora" modal (sometimes appears)
+                # This modal interrupts the flow, asking to confirm posting before checks are done.
+                if page.locator('button:has-text("Post now")').is_visible() or \
+                   page.locator('button:has-text("Pubblica ora")').is_visible():
                      log("⚠️ 'Post now' modal detected immediately.")
                      break
+
                 # Check if we moved to success page
                 if "Manage your posts" in page.content() or "uploaded" in page.content():
                     clicked_success = True
@@ -294,29 +297,45 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
             # 5. Handle "Continue to post?" Modal (Content check)
             # This modal appears if TikTok is still checking the video but allows posting anyway.
-            # Buttons: "Cancel", "Post now"
+            # Buttons: "Cancel", "Post now" (EN), "Pubblica ora" (IT)
             try:
-                # Look for "Post now" button. It might be in the main page or the iframe.
                 # We check the main page first as modals are often top-level.
-                post_now_btn = page.locator('button:has-text("Post now")')
+                # Defined strict selectors for the confirmation button
+                modal_selectors = [
+                    'button:has-text("Post now")',
+                    'button:has-text("Pubblica ora")'
+                ]
                 
-                # Short wait to see if it pops up
-                try:
-                    post_now_btn.wait_for(state="visible", timeout=5000)
-                    log("⚠️ Content check modal detected. Clicking 'Post now'...")
-                    post_now_btn.click()
-                except:
-                    # Maybe it's inside the iframe?
-                    post_now_btn_frame = upload_frame.locator('button:has-text("Post now")')
-                    if post_now_btn_frame.count() > 0 and post_now_btn_frame.is_visible():
-                         log("⚠️ Content check modal detected (in frame). Clicking 'Post now'...")
-                         post_now_btn_frame.click()
-                    else:
-                        # logger.info("No content check modal detected (or timed out), proceeding.")
-                        pass
+                found_modal_btn = None
+                
+                # Check Main Page
+                for sel in modal_selectors:
+                     b = page.locator(sel)
+                     if b.count() > 0 and b.is_visible():
+                         found_modal_btn = b
+                         log(f"⚠️ Content check modal detected (Main Page - {sel}). Clicking...")
+                         break
+                
+                # Check Iframe if not found
+                if not found_modal_btn:
+                     for sel in modal_selectors:
+                         b = upload_frame.locator(sel)
+                         if b.count() > 0 and b.is_visible():
+                             found_modal_btn = b
+                             log(f"⚠️ Content check modal detected (Frame - {sel}). Clicking...")
+                             break
+                
+                if found_modal_btn:
+                    found_modal_btn.click()
+                    time.sleep(5) # Wait for it to vanish/process
+                else:
+                    # logger.info("No content check modal detected (or timed out), proceeding.")
+                    pass
 
             except Exception as e:
-                logger.warning(f"Error handling potential modal: {e}")
+                logger.warning(f"Error handling potential modal: {e}") 
+            
+            # (Old modal handling block removed to prevent duplication)
 
             # Wait for "Your video has been uploaded" or redirect or modal
             # "Manage your posts" button usually appears

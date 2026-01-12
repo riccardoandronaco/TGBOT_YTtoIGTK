@@ -40,9 +40,11 @@ class YouTubeHandler:
                         found_existing = expected_filename_base + ext
                         break
                 
+                is_cached = False
                 if found_existing:
                     logger.info(f"Video {video_id} already exists at {found_existing}. Skipping download.")
                     filename = found_existing
+                    is_cached = True
                 else:
                     # Check if it's a short (usually < 60s and vertical, but yt-dlp handles it as video)
                     # We proceed to download
@@ -67,7 +69,9 @@ class YouTubeHandler:
                     'path': filename,
                     'title': info_dict.get('title', 'No Title'),
                     'description': info_dict.get('description', ''),
-                    'duration': info_dict.get('duration', 0)
+                    'duration': info_dict.get('duration', 0),
+                    'thumbnail': info_dict.get('thumbnail', None),
+                    'is_cached': is_cached
                 }
         except Exception as e:
             logger.error(f"Error downloading video: {e}")
