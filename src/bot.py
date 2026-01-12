@@ -90,16 +90,36 @@ async def _fetch_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, platf
         context.user_data['found_url'] = video_url
         context.user_data['fetch_mode'] = platform_filter # None, 'instagram', or 'tiktok'
 
-        # Create button to confirm download
-        keyboard = [
-            [
-                InlineKeyboardButton("Scarica e Anteprima", callback_data='download_found'),
-                InlineKeyboardButton("Salta", callback_data='skip_found')
+        # Check if file is already downloaded (Smart Cache Pre-Check)
+        # Verify if ID is in filename
+        vid_id = None
+        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", video_url)
+        if match:
+            vid_id = match.group(1)
+            
+        cached_path = None
+        if vid_id and os.path.exists("downloads"): 
+             # Check if file exists in downloads folder
+             for f in os.listdir("downloads"):
+                 if vid_id in f and (f.endswith(".mp4") or f.endswith(".mkv") or f.endswith(".webm")):
+                     cached_path = os.path.join("downloads", f)
+                     break
+        
+        if cached_path:
+            # Skip the "Do you want to download?" question and go straight to process
+            await message.reply_text(f"Trovato (CACHED): {video_url}\nProcesso immediato...")
+            await process_video_url(update, context, video_url)
+        else:
+            # Create button to confirm download
+            keyboard = [
+                [
+                    InlineKeyboardButton("Scarica e Anteprima", callback_data='download_found'),
+                    InlineKeyboardButton("Salta", callback_data='skip_found')
+                ]
             ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await message.reply_text(f"Trovato: {video_url}\nVuoi scaricarlo?", reply_markup=reply_markup)
+            await message.reply_text(f"Trovato: {video_url}\nVuoi scaricarlo?", reply_markup=reply_markup)
 
     except Exception as e:
         logger.error(f"Error fetching next short: {e}")
@@ -416,13 +436,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == 'skip':
+        fetch_mode = context.user_data.get('fetch_mode') # 'instagram', 'tiktok', or None
+        
         if video_id:
-            # Mark as skipped if the user intentionally skips it to move next
-            # But maybe they just uploaded to one platform and want to move next?
-            # If uploaded to at least one, we don't need to add to 'skipped' implicitly, 
-            # OR we can just add to skipped to ensure it doesn't show up again in fetch logic.
-            history_handler.add(video_id, "skipped")
-            await query.edit_message_caption(caption="Procedo al prossimo video...")
+            # Intelligent skip logic for 'skip' button too
+            skip_target = "skipped" # Default
+            if fetch_mode == 'instagram':
+                skip_target = "instagram"
+            elif fetch_mode == 'tiktok':
+                skip_target = "tiktok"
+            
+            history_handler.add(video_id, skip_target)
+            target_msg = skip_target if skip_target != 'skipped' else 'generale'
+            await query.edit_message_caption(caption=f"Saltato (History: {target_msg}). Procedo al prossimo...")
         else:
             await query.edit_message_caption(caption="Video saltato.")
         
@@ -440,7 +466,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                  logger.error(f"Error deleting file {path}: {e}")
             
-        await fetch_next_short(update, context)
+        # Use the correct internal function with the current mode
+        await _fetch_logic(update, context, fetch_mode)
         return
     
     # Helper to refresh keyboard
