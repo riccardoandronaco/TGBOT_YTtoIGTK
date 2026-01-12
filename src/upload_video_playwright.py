@@ -202,7 +202,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         log("1️⃣ Navigating to TikTok upload page...")
         try:
             # Using domcontentloaded + smart wait because networkidle is sometimes flaky on heavy SPAs
-            page.goto("https://www.tiktok.com/upload?lang=en", timeout=90000, wait_until="domcontentloaded")
+            page.goto("https://www.tiktok.com/upload?lang=en", timeout=120000, wait_until="domcontentloaded")
             
             # Smart Wait for the spinner to disappear
             # We wait for either the upload input OR the spinner to be gone
@@ -212,10 +212,15 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 # Instead, we just wait generously for the input.
                 page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video")', timeout=60000)
             except:
-                log("   ⚠️ Initial load timeout (Spinner detected?). attempting reload...")
+                log("   ⚠️ Initial load timeout (Spinner detected). Reloading page...")
+                try:
+                    page.reload(timeout=120000, wait_until="domcontentloaded")
+                    time.sleep(10) # Give it time to render after reload
+                except Exception as e_reload:
+                    log(f"   Reload failed: {e_reload}")
             
             # Additional small wait to ensure JS is hydrated
-            time.sleep(2)
+            time.sleep(5)
             path_1 = take_screenshot(page, "1_upload_page.png")
             log(f"   Upload page loaded. Title: {page.title()}")
             
@@ -235,7 +240,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         try:
             # Wait for file input, visible button, or text area confirming load
             # Added "Select video" text check to avoid false timeout warnings when UI is actually fine
-            page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=45000)
+            log("   Waiting for upload interface to appear (max 120s)...")
+            page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=120000)
         except:
              path_timeout = take_screenshot(page, "warn_upload_timeout.png")
              log("⚠️ Upload page check timeout. Trying fallback navigation...", path_timeout)
