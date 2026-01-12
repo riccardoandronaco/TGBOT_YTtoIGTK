@@ -179,24 +179,25 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
 
         # 0. Check pre-upload video count to verify later
         initial_video_count = -1
-        log("0️⃣ Checking initial video count...")
-        try:
-            page.goto("https://www.tiktok.com/profile", timeout=60000)
-            time.sleep(5) # Wait for hydration
-            content = page.content()
+        # DISABLED FOR PERFORMANCE ON RPI:
+        # log("0️⃣ Checking initial video count...")
+        # try:
+        #     page.goto("https://www.tiktok.com/profile", timeout=60000)
+        #     time.sleep(5) # Wait for hydration
+        #     content = page.content()
             
-            # screen
-            path_0 = take_screenshot(page, "0_profile_init.png")
+        #     # screen
+        #     # path_0 = take_screenshot(page, "0_profile_init.png")
             
-            # Regex for video count
-            match = re.search(r'"videoCount":(\d+)', content)
-            if match:
-                initial_video_count = int(match.group(1))
-                log(f"   Initial Video Count: {initial_video_count}")
-            else:
-                log("   Could not determine initial video count (Regex failed).")
-        except Exception as e:
-            log(f"   Skipping initial count check: {e}")
+        #     # Regex for video count
+        #     match = re.search(r'"videoCount":(\d+)', content)
+        #     if match:
+        #         initial_video_count = int(match.group(1))
+        #         log(f"   Initial Video Count: {initial_video_count}")
+        #     else:
+        #         log("   Could not determine initial video count (Regex failed).")
+        # except Exception as e:
+        #     log(f"   Skipping initial count check: {e}")
         
         # 1. Go to Upload Page
         log("1️⃣ Navigating to TikTok upload page...")
@@ -518,54 +519,22 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                         pass
                     
                     if not is_still_uploading:
-                        log("📍 Page changed but no confirmation. Verifying on Profile...")
-                        try:
-                            # Go to profile to verify
-                            page.goto("https://www.tiktok.com/profile", wait_until='domcontentloaded')
-                            # Wait for post list
-                            try:
-                                page.wait_for_selector('[data-e2e="user-post-item"]', timeout=30000)
-                            except:
-                                pass # Maybe no posts or slow load
-                            
-                            # Get new content
-                            page_content = page.content()
-
-                            # method A: Check Caption
-                            clean_caption = caption.replace("\n", " ").strip()
-                            search_chunk = clean_caption[:30] 
-                            
-                            path_ver = take_screenshot(page, "verify_profile_end.png")
-                            
-                            if search_chunk in page_content:
-                                log(f"✅ Found video text '{search_chunk}' in profile.")
-                                success = True
-                                msg = "Uploaded (Verified on Profile)"
-                            
-                            # Method B: Check Video Count
-                            elif initial_video_count != -1:
-                                match_new = re.search(r'"videoCount":(\d+)', page_content)
-                                if match_new:
-                                    new_count = int(match_new.group(1))
-                                    log(f"   Old Count: {initial_video_count}, New Count: {new_count}")
-                                    if new_count > initial_video_count:
-                                        log("✅ Video count increased!")
-                                        success = True
-                                        msg = "Uploaded (Count Increased)"
-                                    else:
-                                        log(f"❌ Video count did not increase.", path_ver)
-                                else:
-                                    log("⚠️ Could not read new video count.", path_ver)
-                            
-                            if not success:
-                                log(f"❌ Verification failed (Text not found & Count not increased).")
-                                # page.screenshot(path="debug_profile_check.png") # superseded
-                                msg = "Upload Verify Failed (Profile)"
-
-                        except Exception as prof_e:
-                            log(f"⚠️ Profile verification failed/timed out: {prof_e}")
-                            take_screenshot(page, "err_verify_profile.png")
-                            msg = "Upload Verify Error"
+                        log("📍 Page changed but no confirmation. Skipping heavy profile verification on RPi.")
+                        # RPi OPTIMIZATION: Trust that it worked if page changed and no errors, 
+                        # or at least don't risk another crash by reloading profile.
+                        if "upload" not in page.url:
+                             log("✅ URL changed from upload page. Assuming success.")
+                             success = True
+                             msg = "Uploaded (Heuristic: URL Changed)"
+                        else:
+                             log("⚠️ URL still on upload, but button gone/changed. Unsure.")
+                             take_screenshot(page, "warn_ambiguous_success.png")
+                        
+                        # DISABLED FOR PERFORMANCE:
+                        # try:
+                        #     # Go to profile to verify
+                        #     page.goto("https://www.tiktok.com/profile", wait_until='domcontentloaded')
+                        # ... (removed heavy profile check)
                     
                     else:
                         take_screenshot(page, "stuck_on_upload.png")
