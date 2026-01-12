@@ -130,13 +130,14 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         )
         
         # Create context with User Agent to avoid detection
-        # We use a Linux User-Agent to match the Raspberry Pi environment better
-        # USER: When generating cookies on Windows, please spoof this User-Agent in DevTools!
-        # UA: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+        # Switching to Windows UA to avoid mobile-view forced redirects or odd behavior on Linux
+        # UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             viewport={'width': 1920, 'height': 1080},
             device_scale_factor=1,
+            locale="en-US",
+            timezone_id="Europe/Rome"
         )
         
         # Load Cookies
@@ -151,6 +152,11 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
 
         page = context.new_page()
         
+        # Anti-Detection STEALTH Scripts
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        """)
+
         # --- PRO DEBUG LINSTENERS ---
         # 1. Listen for Console Logs (detect JS errors on page)
         page.on("console", lambda msg: logger.info(f"🕸️ BROWSER CONSOLE ({msg.type}): {msg.text}") if msg.type == "error" else None)
@@ -195,12 +201,21 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # 1. Go to Upload Page
         log("1️⃣ Navigating to TikTok upload page...")
         try:
-            # Reverting to default load strategy (wait for 'load' event)
-            # 'domcontentloaded' was too risky, causing premature interaction.
-            page.goto("https://www.tiktok.com/upload?lang=en", timeout=90000)
+            # Using domcontentloaded + smart wait because networkidle is sometimes flaky on heavy SPAs
+            page.goto("https://www.tiktok.com/upload?lang=en", timeout=90000, wait_until="domcontentloaded")
+            
+            # Smart Wait for the spinner to disappear
+            # We wait for either the upload input OR the spinner to be gone
+            try:
+                # Wait for spinner to detach/hide or input to appear
+                # The spinner usually has class-loading like or typical divs. 
+                # Instead, we just wait generously for the input.
+                page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video")', timeout=60000)
+            except:
+                log("   ⚠️ Initial load timeout (Spinner detected?). attempting reload...")
             
             # Additional small wait to ensure JS is hydrated
-            time.sleep(5)
+            time.sleep(2)
             path_1 = take_screenshot(page, "1_upload_page.png")
             log(f"   Upload page loaded. Title: {page.title()}")
             
