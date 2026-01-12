@@ -649,14 +649,40 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop = asyncio.get_running_loop()
             caption = f"{title} #shorts"
 
-            # Callback to update message
-            def progress_callback(status_text):
-                    future = asyncio.run_coroutine_threadsafe(
-                    query.edit_message_caption(caption=f"⏳ Caricamento su TikTok in corso...\n📝 {status_text}"),
-                    loop
-                    )
+            # Callback to update message and send debug screenshots
+            def progress_callback(status_text, screenshot_path=None):
+                    async def update_ui():
+                        try:
+                            # Update text
+                            await query.edit_message_caption(caption=f"⏳ Caricamento su TikTok in corso...\n📝 {status_text}")
+                            
+                            # Send screenshot if provided
+                            if screenshot_path and os.path.exists(screenshot_path):
+                                try:
+                                    # Send as photo, separate from the edit_caption (which is editing the original message)
+                                    # We send a NEW message with the photo so we don't destroy the keyboard on the original
+                                    with open(screenshot_path, 'rb') as photo:
+                                        await context.bot.send_photo(
+                                            chat_id=update.effective_chat.id, 
+                                            photo=photo, 
+                                            caption=f"📸 STATUS: {status_text}"
+                                        )
+                                    # We don't delete immediately to allow debugging if needed, 
+                                    # or we can rely on standard cleanup. 
+                                    # For now, let's keep it or maybe deleting it prevents disk fill up?
+                                    # Let's delete it to be safe on RPi SD card
+                                    try: 
+                                        os.remove(screenshot_path)
+                                    except: pass
+                                except Exception as e_img:
+                                    logger.error(f"Failed to send status screenshot: {e_img}")
+
+                        except Exception as e_ui:
+                            logger.error(f"UI Update failed: {e_ui}")
+
+                    future = asyncio.run_coroutine_threadsafe(update_ui(), loop)
                     try:
-                        future.result(timeout=1)
+                        future.result(timeout=10) # 10s timeout for media upload
                     except:
                         pass
 
@@ -708,12 +734,33 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         return
 
+async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reboots the host system (Raspberry Pi) - Admin only"""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text("⛔ Non sei autorizzato a riavviare il sistema.")
+        return
+
+    await update.message.reply_text("🔄 Riavvio del sistema (Raspberry Pi) in corso... Il bot sarà offline per un paio di minuti.")
+    logger.warning(f"Reboot command issued by user {user_id}")
+    
+    # Give time for the message to send
+    await asyncio.sleep(2)
+    
+    # Execute reboot
+    try:
+        # Works on Linux/Raspberry Pi
+        os.system("sudo reboot")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Errore durante il comando di riavvio: {e}")
+
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
         BotCommand("fetch", "Cerca nuovo short (Menu)"),
         BotCommand("history", "Gestisci storico video"),
-        BotCommand("recap", "Visualizza statistiche")
+        BotCommand("recap", "Visualizza statistiche"),
+        BotCommand("reboot", "Riavvia Raspberry Pi")
     ])
 
 if __name__ == '__main__':
@@ -726,6 +773,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('fetch', fetch_command))
     application.add_handler(CommandHandler('history', history_command))
+    application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))

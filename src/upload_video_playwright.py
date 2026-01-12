@@ -183,9 +183,9 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             match = re.search(r'"videoCount":(\d+)', content)
             if match:
                 initial_video_count = int(match.group(1))
-                log(f"   Initial Video Count: {initial_video_count}", path_0)
+                log(f"   Initial Video Count: {initial_video_count}")
             else:
-                log("   Could not determine initial video count (Regex failed).", path_0)
+                log("   Could not determine initial video count (Regex failed).")
         except Exception as e:
             log(f"   Skipping initial count check: {e}")
         
@@ -199,7 +199,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Additional small wait to ensure JS is hydrated
             time.sleep(5)
             path_1 = take_screenshot(page, "1_upload_page.png")
-            log("   Upload page loaded.", path_1)
+            log("   Upload page loaded.")
             
         except Exception as e:
             log(f"⚠️ Navigation warning (proceeding anyway): {e}")
@@ -215,8 +215,9 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # Check if login is needed (redirected to login page?)
         # A simple check: wait for iframe or select file button
         try:
-            # Wait for file input or iframe
-            page.wait_for_selector('iframe, input[type="file"]', timeout=45000)
+            # Wait for file input, visible button, or text area confirming load
+            # Added "Select video" text check to avoid false timeout warnings when UI is actually fine
+            page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=45000)
         except:
              path_timeout = take_screenshot(page, "warn_upload_timeout.png")
              log("⚠️ Upload page check timeout. Trying fallback navigation...", path_timeout)
@@ -264,27 +265,54 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         
         # Try finding the input in main page or frame
         file_input = upload_frame.locator('input[type="file"]')
-        
-        # STRICT CHECK: If input isn't there, don't crash in set_input_files
-        if file_input.count() == 0:
-            log("❌ File input selector not found after all retries.", take_screenshot(page, "err_no_input.png"))
+        file_set_success = False
+
+        # Strategy A: Hidden Input
+        if file_input.count() > 0:
+            log("2️⃣ Uploading file via hidden input...")
+            try:
+                file_input.set_input_files(video_path)
+                file_set_success = True
+            except Exception as e:
+                log(f"   Hidden input strategy failed: {e}")
+
+        # Strategy B: Click "Select video" (FileChooser)
+        if not file_set_success:
+            log("   Trying 'Select Video' button (FileChooser) strategy...")
+            try:
+                with page.expect_file_chooser(timeout=15000) as fc_info:
+                    # Look for the button with user-reported text
+                    # We look for ANY element containing "Select" visible in the frame
+                    # User said: "c'è scritto Select Video!"
+                    btn = upload_frame.locator('text="Select Video"').first
+                    if not btn.count() or not btn.is_visible():
+                        btn = upload_frame.locator('text="Select video"').first # lowercase check
+                    if not btn.count() or not btn.is_visible():
+                        btn = upload_frame.locator('text="Select file"').first
+                    if not btn.count() or not btn.is_visible():
+                        # Broad check for "Select"
+                         btn = upload_frame.get_by_text("Select", exact=False).first
+                        
+                    if btn.is_visible():
+                        log("   Found visible 'Select' button, clicking...")
+                        btn.click()
+                    else:
+                        raise Exception("Button 'Select Video' not found visible")
+                
+                fc_info.value.set_files(video_path)
+                file_set_success = True
+            except Exception as e_fc:
+                log(f"❌ FileChooser strategy failed: {e_fc}")
+
+        if not file_set_success:
+            log("❌ Critical: Could not upload file (Strategies A & B failed).", take_screenshot(page, "err_file_upload_all_failed.png"))
             browser.close()
-            return False, "Upload Form not found (Spinner/Timeout)"
-        
-        log("2️⃣ Uploading file...")
-        try:
-            file_input.set_input_files(video_path)
-            # Wait a sec for upload interface to react
-            time.sleep(5)
-            path_2 = take_screenshot(page, "2_file_selected.png")
-            log("   File set in input.", path_2)
-            
-        except Exception as e:
-            logger.error(f"Failed to set input file: {e}")
-            path_err = take_screenshot(page, "err_input_file.png")
-            # Debug screenshot
-            browser.close()
-            return (False, f"Input Set Failed: {e}")
+            return False, "Upload Form Error: Could not select file"
+
+        # Wait a sec for upload interface to react
+        time.sleep(5)
+        path_2 = take_screenshot(page, "2_file_selected.png")
+        log("   File set successfully.")
             
         # Wait for upload to complete (Look for "Uploaded" text or progress bar change)
         # Usually looking for the 'Caption' text box appearing is a good sign the previous step worked
@@ -311,7 +339,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             time.sleep(1)
             
             path_3 = take_screenshot(page, "3_caption_set.png")
-            log("   Caption set.", path_3)
+            log("   Caption set.")
             
             # Handle Copyright checks / Compliance if they appear?
             # Usually they are passive.
@@ -351,7 +379,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 log("⚠️ Post button reported disabled by Playwright. Attempting Force-Click...")
                 # We don't return False immediately anymore. We fall through to the click attempt.
                 # Take a debug screenshot strictly for context, but don't abort yet.
-                path_warn = take_screenshot(page, "warn_post_disabled.png")
+                path_warn = take_screenshot(page, "warn_post_disabled.png") # WARN IS NOT ERROR, MAYBE NO SCREENSHOT FOR USER? Or yes because suspicious? Let's hide it for user.
 
             log("5️⃣ Clicking Post...")
             # Retry click mechanism
@@ -384,7 +412,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                     break
                 
                 path_att = take_screenshot(page, f"click_attempt_{attempt+1}.png")
-                log(f"🔄 Clicked Post (Attempt {attempt+1}), checking response...", path_att)
+                log(f"🔄 Clicked Post (Attempt {attempt+1}), checking response...")
             
             # 5. Handle "Continue to post?" Modal (Content check)
             # This modal appears if TikTok is still checking the video but allows posting anyway.
@@ -404,7 +432,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                      b = page.locator(sel)
                      if b.count() > 0 and b.is_visible():
                          found_modal_btn = b
-                         log(f"⚠️ Content check modal detected (Main Page - {sel}). Clicking...")
+                         log(f"⚠️ Content check modal detected (Main Page - {sel}). Clicking...", take_screenshot(page, "modal_main.png"))
                          path_mod2 = take_screenshot(page, "modal_main.png")
                          break
                 
@@ -414,10 +442,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                          b = upload_frame.locator(sel)
                          if b.count() > 0 and b.is_visible():
                              found_modal_btn = b
-                             log(f"⚠️ Content check modal detected (Frame - {sel}). Clicking...")
-                             take_screenshot(page, "modal_frame.png")
-                             break
-                
+                             log(f"⚠️ Content check modal detected (Frame - {sel}). Clicking...", take_screenshot(page, "modal_frame.png"))
                 if found_modal_btn:
                     found_modal_btn.click()
                     time.sleep(5) # Wait for it to vanish/process
@@ -439,7 +464,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 # Primary success check
                 upload_frame.wait_for_selector('text=Manage your posts', timeout=30000)
                 path_succ = take_screenshot(page, "success_page.png")
-                log("✅ Upload confirmed (found 'Manage your posts')!", path_succ)
+                log("✅ Upload confirmed (found 'Manage your posts')!")
                 success = True
                 msg = "Uploaded successfully"
             except:
@@ -452,7 +477,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 if page.locator('div:has-text("Post published")').count() > 0 or \
                    upload_frame.locator('div:has-text("Post published")').count() > 0:
                      path_toast = take_screenshot(page, "toast_success.png")
-                     log("✅ Found 'Post published' toast.", path_toast)
+                     log("✅ Found 'Post published' toast.")
                      success = True
                      msg = "Uploaded (Toast confirmed)"
                 
@@ -489,7 +514,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                             path_ver = take_screenshot(page, "verify_profile_end.png")
                             
                             if search_chunk in page_content:
-                                log(f"✅ Found video text '{search_chunk}' in profile.", path_ver)
+                                log(f"✅ Found video text '{search_chunk}' in profile.")
                                 success = True
                                 msg = "Uploaded (Verified on Profile)"
                             
@@ -500,7 +525,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                                     new_count = int(match_new.group(1))
                                     log(f"   Old Count: {initial_video_count}, New Count: {new_count}")
                                     if new_count > initial_video_count:
-                                        log("✅ Video count increased!", path_ver)
+                                        log("✅ Video count increased!")
                                         success = True
                                         msg = "Uploaded (Count Increased)"
                                     else:
