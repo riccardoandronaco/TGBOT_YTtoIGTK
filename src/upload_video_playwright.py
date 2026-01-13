@@ -290,54 +290,23 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         
         # Try finding the input in main page or frame
         file_input = upload_frame.locator('input[type="file"]')
-        file_set_success = False
-
-        # Strategy A: Hidden Input
-        if file_input.count() > 0:
-            log("2️⃣ Uploading file via hidden input...")
-            try:
-                file_input.set_input_files(video_path)
-                file_set_success = True
-            except Exception as e:
-                log(f"   Hidden input strategy failed: {e}")
-
-        # Strategy B: Click "Select video" (FileChooser)
-        if not file_set_success:
-            log("   Trying 'Select Video' button (FileChooser) strategy...")
-            try:
-                with page.expect_file_chooser(timeout=15000) as fc_info:
-                    # Look for the button with user-reported text
-                    # We look for ANY element containing "Select" visible in the frame
-                    # User said: "c'è scritto Select Video!"
-                    btn = upload_frame.locator('text="Select Video"').first
-                    if not btn.count() or not btn.is_visible():
-                        btn = upload_frame.locator('text="Select video"').first # lowercase check
-                    if not btn.count() or not btn.is_visible():
-                        btn = upload_frame.locator('text="Select file"').first
-                    if not btn.count() or not btn.is_visible():
-                        # Broad check for "Select"
-                         btn = upload_frame.get_by_text("Select", exact=False).first
-                        
-                    if btn.is_visible():
-                        log("   Found visible 'Select' button, clicking...")
-                        btn.click()
-                    else:
-                        raise Exception("Button 'Select Video' not found visible")
-                
-                fc_info.value.set_files(video_path)
-                file_set_success = True
-            except Exception as e_fc:
-                log(f"❌ FileChooser strategy failed: {e_fc}")
-
-        if not file_set_success:
-            log("❌ Critical: Could not upload file (Strategies A & B failed).", take_screenshot(page, "err_file_upload_all_failed.png"))
+        
+        log("2️⃣ Uploading file...")
+        try:
+            # Direct upload via input[type="file"]
+            # We assume the input exists on the page (even if hidden)
+            file_input.first.set_input_files(video_path)
+            
+            # Wait a sec for upload interface to react
+            time.sleep(5)
+            path_2 = take_screenshot(page, "2_file_selected.png")
+            log(f"   File set successfully. Screenshot: {path_2}")
+            
+        except Exception as e:
+            logger.error(f"Failed to set input file: {e}")
+            take_screenshot(page, "err_input_file.png")
             browser.close()
-            return False, "Upload Form Error: Could not select file"
-
-        # Wait a sec for upload interface to react
-        time.sleep(5)
-        path_2 = take_screenshot(page, "2_file_selected.png")
-        log("   File set successfully.")
+            return (False, f"Input Set Failed: {e}")
             
         # Wait for upload to complete (Look for "Uploaded" text or progress bar change)
         # Usually looking for the 'Caption' text box appearing is a good sign the previous step worked
