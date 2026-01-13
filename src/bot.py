@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import subprocess
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler, Application
@@ -782,6 +783,41 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await msg.edit_text(f"❌ Errore Critico Diagnostica: {e}")
 
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Updates the bot via git pull and reboots."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+    
+    await update.message.reply_text("⬇️ Esecuzione `git pull` in corso...", parse_mode="Markdown")
+    
+    try:
+        # Run git pull
+        # Capture output to show the user what changed
+        loop = asyncio.get_running_loop()
+        
+        def run_git():
+            return subprocess.check_output(["git", "pull"], stderr=subprocess.STDOUT, text=True)
+            
+        result = await loop.run_in_executor(None, run_git)
+        
+        if "Already up to date" in result:
+             await update.message.reply_text(f"✅ **Il sistema è aggiornato.**\nNessuna modifica rilevata.", parse_mode="Markdown")
+             return
+             
+        # If changed, schedule reboot
+        await update.message.reply_text(f"✅ **Aggiornamento completato!**\n\nOutput:\n`{result}`\n\n🔄 **Riavvio del sistema in corso...** (attendi 2-3 minuti)", parse_mode="Markdown")
+        
+        # Give time for message to fly out
+        await asyncio.sleep(3)
+        
+        # Reboot
+        os.system("sudo reboot")
+        
+    except subprocess.CalledProcessError as e:
+        await update.message.reply_text(f"❌ Errore Git (Exit Code {e.returncode}):\n`{e.output}`", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Errore generico: {e}")
+
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
@@ -789,6 +825,7 @@ async def post_init(application: Application):
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
         BotCommand("check", "Test Connettività/Ban"),
+        BotCommand("update", "Aggiorna bot e Riavvia"),
         BotCommand("reboot", "Riavvia Raspberry Pi")
     ])
 
@@ -804,6 +841,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))
+    application.add_handler(CommandHandler('update', update_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))
