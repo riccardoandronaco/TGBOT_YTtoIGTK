@@ -6,6 +6,7 @@ import yt_dlp
 import pickle
 import http.cookiejar
 from upload_video_playwright import upload_video as playwright_upload
+from upload_video_playwright import diagnostic_check_headless 
 
 logger = logging.getLogger(__name__)
 
@@ -186,5 +187,9 @@ class TikTokHandler:
         except Exception as e:
             logger.error(f"TikTok upload failed with exception: {e}")
             return False, str(e)
+
+    def check_connection(self):
+        """Runs the diagnostic check."""
+        return diagnostic_check_headless()
 
 

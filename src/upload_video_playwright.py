@@ -586,3 +586,63 @@ if __name__ == "__main__":
     # Test run
     # upload_video(r"downloads\test.mp4", "Test Caption", "config/tiktok_cookies.txt", headless=False)
     pass
+
+def diagnostic_check_headless():
+    """
+    Simple verification to see what the browser sees on the homepage.
+    Returns: (path_to_screenshot, page_title, ip_info)
+    """
+    import json
+    
+    debug_dir = os.path.join(os.getcwd(), "debug_screens")
+    os.makedirs(debug_dir, exist_ok=True)
+    screenshot_path = os.path.join(debug_dir, "diagnostic_home.png")
+    
+    info = {"ip": "Unknown", "title": "Unknown"}
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--start-maximized", 
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--window-size=1920,1080"
+            ]
+        )
+        # Windows spoof
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080},
+            device_scale_factor=1,
+            locale="en-US",
+            timezone_id="Europe/Rome"
+        )
+        page = context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+        
+        try:
+            # 1. Check IP Logic
+            page.goto("https://api.ipify.org?format=json", timeout=30000)
+            content = page.content()
+            try:
+                # Extract simple text since it's rude json
+                # Just grabbing text content
+                 txt = page.locator("body").inner_text()
+                 info["ip"] = txt
+            except: 
+                info["ip"] = "Failed to grab"
+
+            # 2. Check TikTok Home
+            page.goto("https://www.tiktok.com/?lang=en", timeout=60000, wait_until="domcontentloaded")
+            time.sleep(5)
+            page.screenshot(path=screenshot_path)
+            info["title"] = page.title()
+            
+        except Exception as e:
+            info["error"] = str(e)
+            
+        browser.close()
+        return screenshot_path, info

@@ -754,12 +754,41 @@ async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Errore durante il comando di riavvio: {e}")
 
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Checks Network/TikTok Visibility from the Bot's perspective."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+    
+    msg = await update.message.reply_text("🕵️ Controllo connettività e Shadowban... (apertura browser headless)")
+    
+    try:
+        loop = asyncio.get_running_loop()
+        path, info = await loop.run_in_executor(None, tiktok_handler.check_connection)
+        
+        caption = f"📊 **Diagnostica Raspberry**\n\n"
+        caption += f"🌐 IP rilevato: `{info.get('ip', 'N/A')}`\n"
+        caption += f"🏠 Titolo Home TikTok: `{info.get('title', 'N/A')}`\n"
+        
+        if "error" in info:
+            caption += f"❌ Errore: {info['error']}"
+        else:
+            caption += "✅ Browser avviato con successo."
+            
+        with open(path, 'rb') as p:
+            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=p, caption=caption, parse_mode="Markdown")
+        
+        await msg.delete() # clean up loading msg
+        
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore Critico Diagnostica: {e}")
+
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
         BotCommand("fetch", "Cerca nuovo short (Menu)"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
+        BotCommand("check", "Test Connettività/Ban"),
         BotCommand("reboot", "Riavvia Raspberry Pi")
     ])
 
@@ -774,6 +803,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('fetch', fetch_command))
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
+    application.add_handler(CommandHandler('check', check_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))
