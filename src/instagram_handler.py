@@ -12,6 +12,8 @@ class InstagramHandler:
         self.password = password
         self.session_file = session_file
         self.cl = Client()
+        # Aumentiamo il timeout per connessioni lente o RPi
+        self.cl.request_timeout = 120  # 2 minuti di timeout
 
     def login(self):
         """

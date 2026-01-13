@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import subprocess
+import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler, Application
@@ -818,10 +819,145 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Errore generico: {e}")
 
+async def autopilot_task(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    chat_id = job.chat_id
+    
+    # Time Check (07:00 - 23:00 Rome Time)
+    # We try to use pytz if available (installed by telegram-bot usually), or fallback to simple utc offset
+    try:
+        import pytz
+        rome_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(rome_tz)
+    except ImportError:
+        # Fallback: Assume system time is close or use UTC+1/2 approx
+        # For simplicity, if pytz missing, we use system time
+        now = datetime.datetime.now()
+        
+    current_hour = now.hour
+    
+    # If outside working hours (07:00 inclusive to 23:00 exclusive -> 07:00 to 22:59)
+    if current_hour < 7 or current_hour >= 23:
+        # We don't send messages at night to avoid spam, just skip
+        logger.info(f"Autopilot: Night hours ({current_hour}:00). Skipping.")
+        return
+
+    await context.bot.send_message(chat_id, text="🤖 **Autopilot**: Inizio ciclo di ricerca e upload...", parse_mode="Markdown")
+    
+    try:
+        loop = asyncio.get_running_loop()
+        
+        # 1. Fetch Video
+        # We look for a video that is missing ANYWHERE (platform_filter=None)
+        video_url = await loop.run_in_executor(
+            None, 
+            yt_handler.get_oldest_unprocessed_video, 
+            YOUTUBE_CHANNEL_URL, 
+            history_handler, 
+            None 
+        )
+
+        if not video_url:
+            await context.bot.send_message(chat_id, text="🤖 Autopilot: Nessun nuovo video trovato. Riprovo tra 2 ore.")
+            return
+
+        # 2. Download
+        await context.bot.send_message(chat_id, text=f"🤖 Autopilot: Scarico {video_url}...")
+        video_path, video_info = await loop.run_in_executor(None, yt_handler.download_video, video_url)
+        
+        if not video_path:
+             await context.bot.send_message(chat_id, text=f"🤖 Autopilot: Errore download.")
+             return
+
+        video_id = video_info['id']
+        title = video_info['title']
+        # Simplified caption for auto-upload
+        caption = f"{title}\n\n#short #video" 
+        
+        # 3. Check what is needed
+        needs_ig = not history_handler.exists(video_id, "instagram")
+        needs_tt = not history_handler.exists(video_id, "tiktok")
+        
+        results = []
+        
+        # 4. Instagram Upload
+        if needs_ig:
+            try:
+                await context.bot.send_message(chat_id, text="🤖 Autopilot: Caricamento su Instagram...")
+                await loop.run_in_executor(None, ig_handler.upload_video, video_path, caption)
+                history_handler.add_entry(video_id, "instagram")
+                results.append("Instagram: ✅")
+            except Exception as e:
+                logger.error(f"Autopilot IG Error: {e}")
+                results.append(f"Instagram: ❌ ({e})")
+        else:
+            results.append("Instagram: ⏭️ (Già fatto)")
+
+        # 5. TikTok Upload 
+        if needs_tt:
+            try:
+                 await context.bot.send_message(chat_id, text="🤖 Autopilot: Caricamento su TikTok...")
+                 await loop.run_in_executor(None, tiktok_handler.upload_video, video_path, caption)
+                 history_handler.add_entry(video_id, "tiktok")
+                 results.append("TikTok: ✅")
+            except Exception as e:
+                logger.error(f"Autopilot TikTok Error: {e}")
+                results.append(f"TikTok: ❌ ({e})")
+        else:
+             results.append("TikTok: ⏭️ (Già fatto)")
+             
+        # Cleanup
+        if os.path.exists(video_path):
+            try:
+                os.remove(video_path)
+            except:
+                pass
+            
+        final_msg = f"🤖 **Autopilot Report**\nVideo: {title}\n\n" + "\n".join(results)
+        await context.bot.send_message(chat_id, text=final_msg, parse_mode="Markdown")
+        
+    except Exception as e:
+        logger.error(f"Autopilot Critical Error: {e}")
+        await context.bot.send_message(chat_id, text=f"🤖 Autopilot Error: {e}")
+
+async def autopilot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    chat_id = update.effective_chat.id
+    
+    # Remove existing jobs
+    current_jobs = context.job_queue.get_jobs_by_name(f'autopilot_{chat_id}')
+    for job in current_jobs:
+        job.schedule_removal()
+    
+    # Run every 2 hours (7200 seconds). First run in 10 seconds.
+    context.job_queue.run_repeating(autopilot_task, interval=7200, first=10, chat_id=chat_id, name=f'autopilot_{chat_id}')
+    
+    await update.message.reply_text("🤖 **Pilota Automatico ATTIVATO**\n\nCercherò un video ogni 2 ore e lo caricherò su Instagram e TikTok.\nUsa /autostop per fermarmi.")
+
+async def autopilot_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    chat_id = update.effective_chat.id
+    current_jobs = context.job_queue.get_jobs_by_name(f'autopilot_{chat_id}')
+    
+    if not current_jobs:
+        await update.message.reply_text("🤖 Il Pilota Automatico non è attivo.")
+        return
+
+    for job in current_jobs:
+        job.schedule_removal()
+    
+    await update.message.reply_text("🛑 **Pilota Automatico DISATTIVATO**")
+
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
         BotCommand("fetch", "Cerca nuovo short (Menu)"),
+        BotCommand("autostart", "Avvia Pilota Automatico (2h)"),
+        BotCommand("autostop", "Ferma Pilota Automatico"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
         BotCommand("check", "Test Connettività/Ban"),
@@ -838,6 +974,8 @@ if __name__ == '__main__':
 
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('fetch', fetch_command))
+    application.add_handler(CommandHandler('autostart', autopilot_start))
+    application.add_handler(CommandHandler('autostop', autopilot_stop))
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))
