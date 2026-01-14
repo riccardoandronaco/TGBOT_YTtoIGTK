@@ -215,24 +215,42 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         log("1️⃣ Navigating to TikTok upload page...")
         try:
             # Using domcontentloaded + smart wait because networkidle is sometimes flaky on heavy SPAs
-            page.goto("https://www.tiktok.com/upload?lang=en", timeout=120000, wait_until="domcontentloaded")
+            page.goto("https://www.tiktok.com/upload?lang=en", timeout=180000, wait_until="domcontentloaded")
             
-            # Smart Wait for the spinner to disappear
-            # We wait for either the upload input OR the spinner to be gone
-            try:
-                # Wait for spinner to detach/hide or input to appear
-                # The spinner usually has class-loading like or typical divs. 
-                # Instead, we just wait generously for the input.
-                page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video")', timeout=60000)
-            except:
-                log("   ⚠️ Initial load timeout (Spinner detected). Reloading page...")
+            # RPi: Wait generously for spinner to finish and page to fully load
+            # TikTok is a heavy SPA that takes time on low-power devices
+            log("   Waiting for page to fully load (up to 3 minutes for RPi)...")
+            
+            max_wait_seconds = 180  # 3 minutes total
+            check_interval = 10    # Check every 10 seconds
+            elapsed = 0
+            page_ready = False
+            
+            while elapsed < max_wait_seconds:
                 try:
-                    page.reload(timeout=120000, wait_until="domcontentloaded")
-                    time.sleep(10) # Give it time to render after reload
-                except Exception as e_reload:
-                    log(f"   Reload failed: {e_reload}")
+                    # Check if upload elements are present
+                    upload_ready = page.locator('input[type="file"], button:has-text("Select video"), div:has-text("Select video")').first
+                    if upload_ready.count() > 0:
+                        page_ready = True
+                        log(f"   ✓ Page ready after {elapsed}s")
+                        break
+                except:
+                    pass
+                
+                # Log progress every 30 seconds
+                if elapsed > 0 and elapsed % 30 == 0:
+                    log(f"   Still loading... ({elapsed}s)")
+                    take_screenshot(page, f"1_loading_{elapsed}s.png")
+                
+                time.sleep(check_interval)
+                elapsed += check_interval
             
-            # Additional small wait to ensure JS is hydrated
+            if not page_ready:
+                log("   ⚠️ Page still loading after 3 minutes. Trying reload...")
+                page.reload(timeout=120000, wait_until="domcontentloaded")
+                time.sleep(30)  # Wait 30s after reload
+            
+            # Final stabilization wait
             time.sleep(5)
             path_1 = take_screenshot(page, "1_upload_page.png")
             log(f"   Upload page loaded. Title: {page.title()}")
@@ -310,97 +328,78 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         log(f"   File: {video_path} ({file_size_mb:.2f} MB)")
         
         # CRITICAL: Take screenshot of what we see BEFORE trying to upload
-        take_screenshot(page, "2_before_upload_attempt.png")
+        pre_upload_screenshot = take_screenshot(page, "2_before_upload_attempt.png")
         log(f"   Current URL: {page.url}")
         
+        # CHECK: Detect if page is stuck on spinner (only TikTok logo visible)
+        # This happens when page doesn't fully load on RPi
+        page_html = page.content()
+        has_upload_elements = (
+            'input[type="file"]' in page_html or 
+            'Select video' in page_html or 
+            'upload' in page_html.lower()
+        )
+        
+        if not has_upload_elements:
+            log("⚠️ Page appears stuck on spinner. Sending screenshot and aborting...", pre_upload_screenshot)
+            # Try one more reload
+            log("   Attempting page reload...")
+            page.reload(timeout=60000, wait_until="domcontentloaded")
+            time.sleep(10)
+            take_screenshot(page, "2_after_reload.png")
+            page_html = page.content()
+            has_upload_elements = 'input' in page_html or 'Select video' in page_html
+            
+            if not has_upload_elements:
+                err_screenshot = take_screenshot(page, "err_spinner_stuck.png")
+                log("❌ Page still stuck on spinner after reload. Cookie expired?", err_screenshot)
+                browser.close()
+                return (False, "Page stuck on TikTok spinner - check cookies")
+        
         # RPi FIX: Wait longer for page to fully render
-        log("   Waiting for page to stabilize (RPi fix)...")
-        time.sleep(5)
+        log("   Waiting for page to stabilize...")
+        time.sleep(3)
         
         try:
-            # NEW ROBUST STRATEGY: Try File Chooser Trigger first, then fallback to direct input
+            # STRATEGY B ONLY: Direct Input Injection (more reliable)
+            log("   Finding file input element...")
+            input_found = False
             
-            # Detect potential upload buttons
-            # We use a broad text matching to find the red button or the container
-            upload_btn = upload_frame.locator('button:has-text("Select video"), div[role="button"]:has-text("Select video"), span:has-text("Select video")').first
+            # Try main page first
+            file_input = page.locator('input[type="file"]').first
+            if file_input.count() > 0:
+                log("   Found input on main page, setting file...")
+                file_input.set_input_files(video_path, timeout=60000)
+                input_found = True
             
-            # Check if button is visible (wait briefly)
-            can_click_button = False
-            try:
-                upload_btn.wait_for(state="visible", timeout=5000)
-                can_click_button = True
-            except:
-                log("   'Select video' button not immediately visible, searching broader...")
-                # Fallback: try to find the container description if button fails
-                try:
-                    upload_btn = upload_frame.locator('text="Select video"').first
-                    upload_btn.wait_for(state="visible", timeout=3000)
-                    can_click_button = True
-                except:
-                     log("   Broader search failed.")
-
-            if can_click_button:
-                log("   Strategy A: Clicking 'Select video' to trigger File Chooser...")
-                try:
-                    with page.expect_file_chooser(timeout=15000) as fc_info:
-                        upload_btn.click()
-                    file_chooser = fc_info.value
-                    file_chooser.set_files(video_path)
-                    log(f"   File set via FileChooser.")
-                    take_screenshot(page, '2_file_selected_fc.png')
-                except Exception as fc_e:
-                    log(f"   Strategy A failed ({fc_e}). Trying Strategy B...")
-                    # Fallback to Strategy B - but check ALL frames
-                    input_found = False
-                    
-                    # Try main page first
-                    file_input = page.locator('input[type="file"]').first
-                    if file_input.count() > 0:
-                        log("   Strategy B: Direct input on main page...")
-                        file_input.set_input_files(video_path, timeout=60000)
-                        input_found = True
-                    
-                    # Try each frame
-                    if not input_found:
-                        for frame in page.frames:
-                            try:
-                                fi = frame.locator('input[type="file"]').first
-                                if fi.count() > 0:
-                                    log(f"   Strategy B: Found input in frame: {frame.url[:50]}...")
-                                    fi.set_input_files(video_path, timeout=60000)
-                                    input_found = True
-                                    break
-                            except:
-                                continue
-                    
-                    if not input_found:
-                        # DEBUG: List all frames and their content
-                        log(f"   DEBUG: Checking {len(page.frames)} frames...")
-                        for idx, frame in enumerate(page.frames):
-                            try:
-                                inputs = frame.locator('input').count()
-                                btns = frame.locator('button').count()
-                                log(f"   Frame {idx}: {frame.url[:60]}... (inputs: {inputs}, buttons: {btns})")
-                            except: pass
-                        
-                        take_screenshot(page, "2_err_no_input_found.png")
-                        raise Exception("No file input found in any frame")
-            else:
-                log("   Strategy B: Direct Input Injection (Button not found)...")
-                # Same multi-frame approach
-                input_found = False
-                for frame in [page] + page.frames:
+            # Try each frame if not found
+            if not input_found:
+                log(f"   Searching in {len(page.frames)} frames...")
+                for idx, frame in enumerate(page.frames):
                     try:
                         fi = frame.locator('input[type="file"]').first
                         if fi.count() > 0:
+                            log(f"   Found input in frame {idx}: {frame.url[:50]}...")
                             fi.set_input_files(video_path, timeout=60000)
                             input_found = True
-                            log(f"   Input found and file set.")
                             break
                     except:
                         continue
-                if not input_found:
-                    raise Exception("No file input found")
+            
+            if not input_found:
+                # DEBUG: List all frames and their content
+                log(f"   DEBUG: No file input found. Checking {len(page.frames)} frames...")
+                for idx, frame in enumerate(page.frames):
+                    try:
+                        inputs = frame.locator('input').count()
+                        btns = frame.locator('button').count()
+                        log(f"   Frame {idx}: {frame.url[:60]}... (inputs: {inputs}, buttons: {btns})")
+                    except: pass
+                
+                err_screenshot = take_screenshot(page, "2_err_no_input_found.png")
+                raise Exception("No file input found in any frame")
+            
+            log("   ✓ File set successfully!")
             
             # Wait a sec for upload interface to react
             time.sleep(5)
