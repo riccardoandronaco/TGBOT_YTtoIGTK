@@ -438,16 +438,11 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                         # Extra safety: Click Cancel if still there
                         cancel_btns = page.locator('button:has-text("Cancel"), button:has-text("Stay"), button:has-text("Annulla")')
                         if cancel_btns.count() > 0 and cancel_btns.first.is_visible():
-                            cancel_btns.first.click()
+                            cancel_btns.first.click(force=True)
                             time.sleep(1)
                 except: pass
 
-                # FIX 2: Ensure we are not clicking the "Back to TikTok" link in the footer
-                # We try to scroll the Post button to the MIDDLE of the view, not just into view
-                try:
-                    post_btn.scroll_into_view_if_needed()
-                    # Optional: small adjustment if element is covered
-                except: pass
+                # SCROLLING REMOVED on User Request: JS click handles off-screen elements.
 
                 try:
                     # Prefer JS click to bypass overlays or 'disabled' checks

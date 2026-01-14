@@ -1104,6 +1104,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('clearcache', clear_cache))
     application.add_handler(CommandHandler('autostart', autopilot_start))
     application.add_handler(CommandHandler('autostop', autopilot_stop))
+    application.add_handler(CommandHandler('testtiktok', test_tiktok_flow))
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))
