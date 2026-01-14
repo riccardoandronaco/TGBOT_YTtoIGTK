@@ -309,6 +309,14 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
         log(f"   File: {video_path} ({file_size_mb:.2f} MB)")
         
+        # CRITICAL: Take screenshot of what we see BEFORE trying to upload
+        take_screenshot(page, "2_before_upload_attempt.png")
+        log(f"   Current URL: {page.url}")
+        
+        # RPi FIX: Wait longer for page to fully render
+        log("   Waiting for page to stabilize (RPi fix)...")
+        time.sleep(5)
+        
         try:
             # NEW ROBUST STRATEGY: Try File Chooser Trigger first, then fallback to direct input
             
@@ -366,6 +374,16 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                                 continue
                     
                     if not input_found:
+                        # DEBUG: List all frames and their content
+                        log(f"   DEBUG: Checking {len(page.frames)} frames...")
+                        for idx, frame in enumerate(page.frames):
+                            try:
+                                inputs = frame.locator('input').count()
+                                btns = frame.locator('button').count()
+                                log(f"   Frame {idx}: {frame.url[:60]}... (inputs: {inputs}, buttons: {btns})")
+                            except: pass
+                        
+                        take_screenshot(page, "2_err_no_input_found.png")
                         raise Exception("No file input found in any frame")
             else:
                 log("   Strategy B: Direct Input Injection (Button not found)...")
@@ -390,7 +408,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
         except Exception as e:
             logger.error(f"Failed to set input file: {e}")
-            take_screenshot(page, "err_input_file.png")
+            err_screenshot = take_screenshot(page, "err_input_file.png")
+            log(f"❌ Input Set Failed: {e}", err_screenshot)  # This sends screenshot to Telegram
             browser.close()
             return (False, f"Input Set Failed: {e}")
             
@@ -719,8 +738,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                                     log(f"Failed to click Draft: {de}")
                         
                         if not draft_clicked:
-                            log("❌ Post verification failed AND No Draft option found.")
-                            take_screenshot(page, "err_final_fail.png")
+                            err_path = take_screenshot(page, "err_final_fail.png")
+                            log("❌ Post verification failed AND No Draft option found.", err_path)
                             success = False
                             msg = "Upload Verify Failed & No Draft"
             
@@ -730,6 +749,7 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         except Exception as e:
             logger.error(f"Error during upload workflow: {e}")
             path_crit = take_screenshot(page, "critical_error.png")
+            log(f"❌ Critical Error: {e}", path_crit)  # Send screenshot to Telegram
             try:
                 browser.close()
             except:
