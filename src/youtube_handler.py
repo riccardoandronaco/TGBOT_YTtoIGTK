@@ -30,7 +30,6 @@ class YouTubeHandler:
                 'preferedformat': 'mp4',
             }],
         }
-        }
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
