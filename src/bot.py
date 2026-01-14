@@ -942,6 +942,41 @@ async def autopilot_task(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Autopilot Critical Error: {e}")
         await context.bot.send_message(chat_id, text=f"🤖 Autopilot Error: {e}")
 
+async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    try:
+        downloads_dir = DOWNLOAD_PATH
+        if not os.path.exists(downloads_dir):
+             await update.message.reply_text("Cartella downloads non esistente.")
+             return
+
+        files = os.listdir(downloads_dir)
+        count = 0
+        deleted_size_mb = 0
+        
+        for f in files:
+            file_path = os.path.join(downloads_dir, f)
+            try:
+                if os.path.isfile(file_path):
+                    size = os.path.getsize(file_path)
+                    os.remove(file_path)
+                    count += 1
+                    deleted_size_mb += size / (1024 * 1024)
+            except Exception as e:
+                logger.error(f"Failed to delete {file_path}: {e}")
+        
+        await update.message.reply_text(
+            f"🗑️ **Cache Svuotata**\n"
+            f"File cancellati: {count}\n"
+            f"Spazio liberato: {deleted_size_mb:.2f} MB\n\n"
+            f"I video verranno riscaricati col nuovo codec al prossimo tentativo."
+        )
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        await update.message.reply_text(f"Errore pulizia cache: {e}")
+
 async def autopilot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -982,6 +1017,7 @@ async def post_init(application: Application):
         BotCommand("autostop", "Ferma Pilota Automatico"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
+        BotCommand("clearcache", "Svuota cartella download"),
         BotCommand("check", "Test Connettività/Ban"),
         BotCommand("update", "Aggiorna bot e Riavvia"),
         BotCommand("reboot", "Riavvia Raspberry Pi")
@@ -996,6 +1032,7 @@ if __name__ == '__main__':
 
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('fetch', fetch_command))
+    application.add_handler(CommandHandler('clearcache', clear_cache))
     application.add_handler(CommandHandler('autostart', autopilot_start))
     application.add_handler(CommandHandler('autostop', autopilot_stop))
     application.add_handler(CommandHandler('history', history_command))

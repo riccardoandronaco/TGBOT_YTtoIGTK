@@ -16,13 +16,20 @@ class YouTubeHandler:
         Downloads a video from YouTube (Shorts or regular) using yt-dlp.
         Returns a dictionary with 'path', 'title', and 'description'.
         """
+        # Force H.264 video and AAC audio for maximum compatibility with TikTok
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'format': 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': os.path.join(self.download_path, '%(id)s.%(ext)s'),
             'restrictfilenames': True,
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
+            # Post processor to ensure consistent format if not avc1
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }],
+        }
         }
 
         try:
