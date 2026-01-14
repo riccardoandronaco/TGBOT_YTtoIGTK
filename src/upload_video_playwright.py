@@ -304,6 +304,11 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # file_input = upload_frame.locator('input[type="file"]') # OLD DIRECT METHOD
         
         log("2️⃣ Uploading file...")
+        
+        # DEBUG: Log file info
+        file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+        log(f"   File: {video_path} ({file_size_mb:.2f} MB)")
+        
         try:
             # NEW ROBUST STRATEGY: Try File Chooser Trigger first, then fallback to direct input
             
@@ -329,22 +334,59 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             if can_click_button:
                 log("   Strategy A: Clicking 'Select video' to trigger File Chooser...")
                 try:
-                    with page.expect_file_chooser(timeout=10000) as fc_info:
+                    with page.expect_file_chooser(timeout=15000) as fc_info:
                         upload_btn.click()
                     file_chooser = fc_info.value
                     file_chooser.set_files(video_path)
-                    log(f"   File set via FileChooser. Screenshot: {take_screenshot(page, '2_file_selected_fc.png')}")
+                    log(f"   File set via FileChooser.")
+                    take_screenshot(page, '2_file_selected_fc.png')
                 except Exception as fc_e:
-                    log(f"   Strategy A failed ({fc_e}). Trying Strategy B (Direct Input)...")
-                    # Fallback to Strategy B
-                    upload_frame.locator('input[type="file"]').first.set_input_files(video_path)
+                    log(f"   Strategy A failed ({fc_e}). Trying Strategy B...")
+                    # Fallback to Strategy B - but check ALL frames
+                    input_found = False
+                    
+                    # Try main page first
+                    file_input = page.locator('input[type="file"]').first
+                    if file_input.count() > 0:
+                        log("   Strategy B: Direct input on main page...")
+                        file_input.set_input_files(video_path, timeout=60000)
+                        input_found = True
+                    
+                    # Try each frame
+                    if not input_found:
+                        for frame in page.frames:
+                            try:
+                                fi = frame.locator('input[type="file"]').first
+                                if fi.count() > 0:
+                                    log(f"   Strategy B: Found input in frame: {frame.url[:50]}...")
+                                    fi.set_input_files(video_path, timeout=60000)
+                                    input_found = True
+                                    break
+                            except:
+                                continue
+                    
+                    if not input_found:
+                        raise Exception("No file input found in any frame")
             else:
                 log("   Strategy B: Direct Input Injection (Button not found)...")
-                upload_frame.locator('input[type="file"]').first.set_input_files(video_path)
+                # Same multi-frame approach
+                input_found = False
+                for frame in [page] + page.frames:
+                    try:
+                        fi = frame.locator('input[type="file"]').first
+                        if fi.count() > 0:
+                            fi.set_input_files(video_path, timeout=60000)
+                            input_found = True
+                            log(f"   Input found and file set.")
+                            break
+                    except:
+                        continue
+                if not input_found:
+                    raise Exception("No file input found")
             
             # Wait a sec for upload interface to react
             time.sleep(5)
-            # path_2 = take_screenshot(page, "2_file_selected.png") # Already took one above or handled
+            take_screenshot(page, "2b_after_file_set.png")
             
         except Exception as e:
             logger.error(f"Failed to set input file: {e}")
@@ -449,6 +491,28 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
             log("4️⃣ Waiting for 'Post' button...")
             
+            # Wait for video processing to complete BEFORE checking Post button
+            # Look for "Uploaded" indicator or progress bar completion
+            log("   Waiting for video processing...")
+            for wait_i in range(30):  # Up to 60 seconds
+                try:
+                    # Check if "Uploaded" text is visible (means processing done)
+                    if page.locator('text="Uploaded"').is_visible():
+                        log("   ✓ Video upload confirmed")
+                        break
+                    # Check for progress percentage
+                    progress = page.locator('text=/\\d+%/').first
+                    if progress.is_visible():
+                        pct = progress.text_content()
+                        if "100" in pct:
+                            log("   ✓ Upload at 100%")
+                            break
+                except: pass
+                time.sleep(2)
+            
+            # Extra wait for TikTok to finish processing
+            time.sleep(3)
+            
             # NO SCROLLING - JS click works on off-screen elements
             
             # Wait until Post button is enabled
@@ -496,9 +560,14 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                         log(f"   DEBUG: Clicking element: <{btn_tag} class='{btn_class}'>{btn_text}</>")
                     except: pass
                     
-                    # Prefer JS click to bypass overlays or 'disabled' checks
-                    post_btn.evaluate("node => node.click()")
-                    log(f"   Click attempt {attempt+1} (JS)...")
+                    # Try STANDARD click first (more reliable), then JS as fallback
+                    try:
+                        post_btn.click(timeout=5000)
+                        log(f"   Click attempt {attempt+1} (Standard)...")
+                    except Exception as std_click_err:
+                        log(f"   Standard click failed ({std_click_err}), trying JS...")
+                        post_btn.evaluate("node => node.click()")
+                        log(f"   Click attempt {attempt+1} (JS)...")
                 except Exception as click_err:
                     log(f"   JS Click failed, trying standard click: {click_err}")
                     try:
