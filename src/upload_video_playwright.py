@@ -92,7 +92,13 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
              debug_dir = os.path.join(os.getcwd(), "debug_screens")
              os.makedirs(debug_dir, exist_ok=True)
              path = os.path.join(debug_dir, name)
-             p.screenshot(path=path)
+             
+             # Try full page screenshot if possible (only works on Page objects, not Locators)
+             try:
+                p.screenshot(path=path, full_page=True)
+             except:
+                # Fallback for Elements or if full_page fails
+                p.screenshot(path=path)
              
              # PRO DEBUG: Dump HTML structure if it's an error
              if "err" in name or "warn" in name or "fail" in name:
@@ -372,40 +378,47 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
             # Wait specifically for "Post" button to be enabled.
             # Post button usually says "Post" but has specific data attribute
-            post_btn = upload_frame.locator('button[data-e2e="post_video_button"]')
-            if post_btn.count() == 0:
-                 # Fallback if attribute changes
-                 post_btn = upload_frame.locator('button:has-text("Post")').first
+            # We look for ANY clickable button that says Post/Pubblica
+            post_btn = upload_frame.locator('button:has-text("Post"), button:has-text("Pubblica")').first
             
-            log("4️⃣ Waiting for 'Post' button...")
-            # Wait until not disabled
-            # Verify if upload is done: Progress bar usually disappears or reaches 100%
+            log("4️⃣ Waiting for 'Post' button (Active)...")
             
-            # Smart wait: check repeatedly if button is enabled
-            # Sometimes there are two "Post" buttons (one disabled hidden, one enabled)
-            # We look for the enabled one.
+            # SCROLLING IS CRITICAL HERE:
+            # TikTok Studio puts the Post button at the bottom right. On 1080p height it might be off screen.
+            try: 
+                 page.mouse.wheel(0, 5000) # Mouse wheel better than evaluate scroll
+                 time.sleep(1)
+            except: pass
             
-            for i in range(30): # Wait up to 60 seconds
-                if post_btn.is_enabled():
+            # Wait until something is active
+            ready_to_click = False
+            for i in range(40): # Wait up to 80 seconds (upload+check can be slow)
+                # Scroll again every few loops to keep it active
+                if i % 5 == 0:
+                     try: page.evaluate("window.scrollTo(0, document.body.scrollHeight)") 
+                     except: pass
+                
+                # Check enablement
+                if post_btn.is_visible() and post_btn.is_enabled():
                     log("✅ Post button enabled.")
+                    ready_to_click = True
                     break
                 
-                # Check if it looks enabled visually/by class? 
-                # Sometimes is_enabled() is strict about 'disabled' attribute but TikTok uses classes
-                # We can try to assume it's ready if we waited enough
-                if i > 10: 
-                     # After 20 seconds, try to verify if it's actually clickable?
-                     pass
+                # Check upload progress text?
+                try:
+                    # Sometimes text like "Uploading... 45%" is visible.
+                    pass 
+                except: pass
                 
                 time.sleep(2)
             
             # Even if Playwright thinks it's disabled, if it's red/visible it might be clickable via JS.
-            # We try to proceed to clicking logic regardless, but with a warning.
-            if not post_btn.is_enabled():
-                log("⚠️ Post button reported disabled by Playwright. Attempting Force-Click...")
-                # We don't return False immediately anymore. We fall through to the click attempt.
-                # Take a debug screenshot strictly for context, but don't abort yet.
-                path_warn = take_screenshot(page, "warn_post_disabled.png") # WARN IS NOT ERROR, MAYBE NO SCREENSHOT FOR USER? Or yes because suspicious? Let's hide it for user.
+            if not ready_to_click:
+                log("⚠️ Post button might be disabled (Timeout). Attempting Force-Click anyway...")
+                # Scroll to it
+                try: post_btn.scroll_into_view_if_needed()
+                except: pass
+                path_warn = take_screenshot(page, "warn_post_disabled.png") 
 
             log("5️⃣ Clicking Post...")
             # Retry click mechanism
