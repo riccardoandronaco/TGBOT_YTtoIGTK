@@ -373,23 +373,41 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             path_3 = take_screenshot(page, "3_caption_set.png")
             log("   Caption set.")
             
-            # Handle Copyright checks / Compliance if they appear?
-            # Usually they are passive.
-            
             # HELPER: Function to dismiss "Exit" modal if present
             def dismiss_exit_modal():
                 """Check and dismiss the Exit confirmation modal if visible."""
                 try:
-                    # Look for the modal's Cancel button directly
-                    cancel_btn = page.locator('button:has-text("Cancel")').first
-                    if cancel_btn.is_visible():
-                        logger.info("🚨 Exit modal detected! Clicking Cancel...")
+                    # Method 1: Direct click on Cancel button in modal
+                    cancel_btn = page.locator('div[role="dialog"] button:has-text("Cancel"), div[class*="modal"] button:has-text("Cancel")').first
+                    if cancel_btn.count() > 0 and cancel_btn.is_visible():
+                        logger.info("🚨 Exit modal detected (dialog)! Clicking Cancel...")
                         cancel_btn.click(force=True)
                         time.sleep(1)
                         return True
-                except:
-                    pass
+                    
+                    # Method 2: Look for any visible Cancel next to an Exit button
+                    if page.locator('button:has-text("Exit")').is_visible():
+                        cancel_btn = page.locator('button:has-text("Cancel")').first
+                        if cancel_btn.is_visible():
+                            logger.info("🚨 Exit button visible! Clicking Cancel...")
+                            cancel_btn.click(force=True)
+                            time.sleep(1)
+                            return True
+                    
+                    # Method 3: ESC key as last resort
+                    if page.locator('text="Are you sure you want to exit?"').is_visible():
+                        logger.info("🚨 Exit text detected! Pressing Escape...")
+                        page.keyboard.press("Escape")
+                        time.sleep(1)
+                        return True
+                        
+                except Exception as e:
+                    logger.debug(f"dismiss_exit_modal error: {e}")
                 return False
+            
+            # Check for modal RIGHT AFTER caption is set
+            dismiss_exit_modal()
+            take_screenshot(page, "3b_after_caption_check.png")
             
             # Wait specifically for "Post" button to be enabled.
             post_btn = upload_frame.locator('button:has-text("Post"), button:has-text("Pubblica")').first
@@ -401,14 +419,19 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Wait until Post button is enabled
             ready_to_click = False
             for i in range(40): # Wait up to 80 seconds
-                # Check for Exit modal EVERY iteration
-                dismiss_exit_modal()
+                # Check for Exit modal EVERY iteration - BEFORE anything else
+                if dismiss_exit_modal():
+                    log(f"   Modal dismissed at iteration {i}")
+                    take_screenshot(page, f"modal_dismissed_{i}.png")
                 
                 # Check if Post button exists and is enabled
-                if post_btn.count() > 0 and post_btn.is_enabled():
-                    log("✅ Post button enabled.")
-                    ready_to_click = True
-                    break
+                try:
+                    if post_btn.count() > 0 and post_btn.is_enabled():
+                        log("✅ Post button enabled.")
+                        ready_to_click = True
+                        break
+                except Exception as btn_err:
+                    logger.debug(f"Post button check error: {btn_err}")
                 
                 time.sleep(2)
             
@@ -417,13 +440,17 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 path_warn = take_screenshot(page, "warn_post_timeout.png") 
 
             log("5️⃣ Clicking Post (JS)...")
+            # Take screenshot BEFORE clicking
+            take_screenshot(page, "5_before_post_click.png")
+            
             # Retry click mechanism
             clicked_success = False
             for attempt in range(3):
                 # Always try to dismiss modal first
-                dismiss_exit_modal()
-
-                # SCROLLING REMOVED on User Request: JS click handles off-screen elements.
+                if dismiss_exit_modal():
+                    log(f"   Modal dismissed before click attempt {attempt+1}")
+                    time.sleep(1)
+                    take_screenshot(page, f"5_modal_dismissed_attempt_{attempt+1}.png")
 
                 try:
                     # Prefer JS click to bypass overlays or 'disabled' checks
