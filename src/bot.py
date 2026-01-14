@@ -761,7 +761,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_authorized(user_id): return
     
-    msg = await update.message.reply_text("🕵️ Controllo connettività e Shadowban... (apertura browser headless)")
+    msg = await update.message.reply_text("🕵️ Controllo connettività e Login TikTok... (apertura browser headless)")
     
     try:
         loop = asyncio.get_running_loop()
@@ -769,12 +769,14 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         caption = f"📊 **Diagnostica Raspberry**\n\n"
         caption += f"🌐 IP rilevato: `{info.get('ip', 'N/A')}`\n"
-        caption += f"🏠 Titolo Home TikTok: `{info.get('title', 'N/A')}`\n"
+        caption += f"👤 Login: {info.get('login', 'N/A')}\n"
+        caption += f"🍪 Cookies L: {info.get('cookies_loaded', '0')}\n"
+        caption += f"🏠 Titolo: `{info.get('title', 'N/A')}`\n"
         
         if "error" in info:
             caption += f"❌ Errore: {info['error']}"
         else:
-            caption += "✅ Browser avviato con successo."
+            caption += "✅ Check completato."
             
         with open(path, 'rb') as p:
             await context.bot.send_photo(chat_id=update.effective_chat.id, photo=p, caption=caption, parse_mode="Markdown")
@@ -821,28 +823,36 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def autopilot_task(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
+    # Robust chat_id retrieval
     chat_id = job.chat_id
-    
+    if not chat_id and job.data:
+        chat_id = job.data if isinstance(job.data, int) else None
+
+    if not chat_id:
+        logger.error("Autopilot Task: Missing chat_id!")
+        return
+
     # Time Check (07:00 - 23:00 Rome Time)
-    # We try to use pytz if available (installed by telegram-bot usually), or fallback to simple utc offset
     try:
         import pytz
         rome_tz = pytz.timezone('Europe/Rome')
         now = datetime.datetime.now(rome_tz)
     except ImportError:
-        # Fallback: Assume system time is close or use UTC+1/2 approx
-        # For simplicity, if pytz missing, we use system time
         now = datetime.datetime.now()
         
     current_hour = now.hour
-    
+    logger.info(f"Autopilot Run: Hour {current_hour}")
+
     # If outside working hours (07:00 inclusive to 23:00 exclusive -> 07:00 to 22:59)
     if current_hour < 7 or current_hour >= 23:
-        # We don't send messages at night to avoid spam, just skip
         logger.info(f"Autopilot: Night hours ({current_hour}:00). Skipping.")
+        # Optional: Send a 'sleeping' message only if it's the very first time? 
+        # Or just log it. If user complains about 'no feedback', maybe we send a muted message?
+        # Let's send a debug message so user knows it's alive.
+        # await context.bot.send_message(chat_id, text=f"😴 Autopilot: Orario notturno ({current_hour}:00). Dormo...", disable_notification=True)
         return
 
-    await context.bot.send_message(chat_id, text="🤖 **Autopilot**: Inizio ciclo di ricerca e upload...", parse_mode="Markdown")
+    await context.bot.send_message(chat_id, text=f"🤖 **Autopilot (h{current_hour})**: Ricerca video...", parse_mode="Markdown")
     
     try:
         loop = asyncio.get_running_loop()

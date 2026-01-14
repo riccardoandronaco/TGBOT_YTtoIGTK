@@ -190,6 +190,6 @@ class TikTokHandler:
 
     def check_connection(self):
         """Runs the diagnostic check."""
-        return diagnostic_check_headless()
+        return diagnostic_check_headless(self.cookies_path)
 
 

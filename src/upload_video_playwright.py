@@ -556,10 +556,10 @@ if __name__ == "__main__":
     # upload_video(r"downloads\test.mp4", "Test Caption", "config/tiktok_cookies.txt", headless=False)
     pass
 
-def diagnostic_check_headless():
+def diagnostic_check_headless(cookie_path=None):
     """
-    Simple verification to see what the browser sees on the homepage.
-    Returns: (path_to_screenshot, page_title, ip_info)
+    Verification to see what the browser sees on the homepage AND if login works.
+    Returns: (path_to_screenshot, info_dict)
     """
     import json
     
@@ -567,7 +567,7 @@ def diagnostic_check_headless():
     os.makedirs(debug_dir, exist_ok=True)
     screenshot_path = os.path.join(debug_dir, "diagnostic_home.png")
     
-    info = {"ip": "Unknown", "title": "Unknown"}
+    info = {"ip": "Unknown", "title": "Unknown", "login": "Checking..."}
     
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -581,7 +581,6 @@ def diagnostic_check_headless():
                 "--window-size=1920,1080"
             ]
         )
-        # Windows spoof
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             viewport={'width': 1920, 'height': 1080},
@@ -589,27 +588,56 @@ def diagnostic_check_headless():
             locale="en-US",
             timezone_id="Europe/Rome"
         )
+        
+        # Load Cookies if provided
+        if cookie_path:
+             cookies = load_cookies(cookie_path)
+             # Filter for tiktok
+             tk_cookies = [c for c in cookies if "tiktok" in c.get('domain', '')]
+             if tk_cookies:
+                 context.add_cookies(tk_cookies)
+                 info["cookies_loaded"] = len(tk_cookies)
+             else:
+                 info["cookies_loaded"] = 0
+        
         page = context.new_page()
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
         
         try:
             # 1. Check IP Logic
-            page.goto("https://api.ipify.org?format=json", timeout=30000)
-            content = page.content()
             try:
-                # Extract simple text since it's rude json
-                # Just grabbing text content
-                 txt = page.locator("body").inner_text()
-                 info["ip"] = txt
+                page.goto("https://api.ipify.org?format=json", timeout=30000)
+                txt = page.locator("body").inner_text()
+                info["ip"] = txt
             except: 
                 info["ip"] = "Failed to grab"
 
-            # 2. Check TikTok Home
+            # 2. Check TikTok Home & Login Status
             page.goto("https://www.tiktok.com/?lang=en", timeout=60000, wait_until="domcontentloaded")
             time.sleep(5)
+            
+            # Check Login indicators
+            # "Log in" button existence often means logged out.
+            # Avatar or "Upload" usually means logged in.
+            
+            is_login_btn_visible = page.locator('button:has-text("Log in")').is_visible()
+            # Also check for profile avatar (usually has alt user name or generic class)
+            # A good check is attempting to go to /upload or /profile
+            
+            screenshot_path = os.path.join(debug_dir, "diagnostic_home.png")
             page.screenshot(path=screenshot_path)
             info["title"] = page.title()
             
+            if is_login_btn_visible:
+                info["login"] = "❌ LOGOUT DETECTED (Login button visible)"
+            else:
+                # deeper check
+                if page.locator('div[data-e2e="profile-icon"]').count() > 0 or \
+                   page.locator('a[href*="/upload"]').is_visible():
+                       info["login"] = "✅ LOGGED IN"
+                else:
+                       info["login"] = "⚠️ UNCERTAIN (No login btn, but no profile icon)"
+
         except Exception as e:
             info["error"] = str(e)
             
