@@ -28,14 +28,21 @@ Un bot Telegram privato per scaricare video YouTube Shorts e caricarli automatic
     cd TGBOT_YTtoIGTK
     ```
 
-2.  Crea un ambiente virtuale (opzionale ma consigliato):
+2.  Crea un ambiente virtuale (**Obbligatorio su Raspberry Pi/Linux recenti**):
     ```bash
-    python -m venv venv
-    # Windows
-    venv\Scripts\activate
-    # Linux/Mac
-    source venv/bin/activate
+    # Se necessario, installa venv
+    sudo apt install python3-venv -y
+
+    # Crea l'ambiente nella cartella .venv
+    python3 -m venv .venv
+    
+    # Attiva l'ambiente
+    # Windows:
+    .venv\Scripts\activate
+    # Linux/Raspberry Pi:
+    source .venv/bin/activate
     ```
+    *Nota: Se usi Raspberry Pi, dovrai attivare l'ambiente (`source .venv/bin/activate`) ogni volta che apri un nuovo terminale per lavorare sul bot.*
 
 3.  Installa le dipendenze:
     ```bash

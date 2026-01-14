@@ -705,16 +705,26 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await refresh_keyboard(msg_caption=f"⚠️ Upload TikTok fallito: {msg}")
                 
-                # Check for debug screenshots
-                for img_name in ["debug_upload_fail.png", "debug_post_disabled.png", "debug_login_redirect.png", "debug_profile_check.png", "debug_upload_error.png"]:
-                    if os.path.exists(img_name):
+                # Check for debug screenshots in debug_screens folder
+                debug_frames = ["debug_upload_fail.png", "debug_post_disabled.png", "debug_login_redirect.png", "debug_profile_check.png", "debug_upload_error.png", "err_input_file.png", "err_upload_check.png", "warn_upload_timeout.png"]
+                
+                debug_dir = os.path.join(os.getcwd(), "debug_screens")
+                
+                for img_name in debug_frames:
+                    img_path = os.path.join(debug_dir, img_name)
+                    if os.path.exists(img_path):
                         try:
-                            await context.bot.send_photo(
-                                chat_id=update.effective_chat.id, 
-                                photo=open(img_name, 'rb'),
-                                caption=f"📸 Debug: {img_name}"
-                            )
-                            os.remove(img_name)
+                            # Send photo using FS path
+                            with open(img_path, 'rb') as photo:
+                                await context.bot.send_photo(
+                                    chat_id=update.effective_chat.id, 
+                                    photo=photo,
+                                    caption=f"📸 Debug: {img_name}"
+                                )
+                            # Cleanup
+                            try:
+                                os.remove(img_path)
+                            except: pass
                         except Exception as img_e:
                             logger.error(f"Failed to send debug screenshot {img_name}: {img_e}")
 
@@ -722,15 +732,17 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error uploading to TikTok: {e}")
             await refresh_keyboard(msg_caption=f"❌ Errore TikTok: {e}")
             
-            # Send debug screenshot if available
-            if os.path.exists("debug_upload_fail.png"):
+            # Send debug screenshot if available (Exception case)
+            debug_fail_path = os.path.join(os.getcwd(), "debug_screens", "debug_upload_fail.png")
+            if os.path.exists(debug_fail_path):
                 try:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id, 
-                        photo=open("debug_upload_fail.png", 'rb'),
-                        caption="📸 Screenshot Errore TikTok (Exception)"
-                    )
-                    os.remove("debug_upload_fail.png")
+                    with open(debug_fail_path, 'rb') as photo:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id, 
+                            photo=photo,
+                            caption="📸 Screenshot Errore TikTok (Exception)"
+                        )
+                    os.remove(debug_fail_path)
                 except Exception as img_e:
                     logger.error(f"Failed to send debug screenshot: {img_e}")
         
