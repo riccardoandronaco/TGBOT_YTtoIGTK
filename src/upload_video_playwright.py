@@ -376,71 +376,52 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Handle Copyright checks / Compliance if they appear?
             # Usually they are passive.
             
+            # HELPER: Function to dismiss "Exit" modal if present
+            def dismiss_exit_modal():
+                """Check and dismiss the Exit confirmation modal if visible."""
+                try:
+                    # Look for the modal's Cancel button directly
+                    cancel_btn = page.locator('button:has-text("Cancel")').first
+                    if cancel_btn.is_visible():
+                        logger.info("🚨 Exit modal detected! Clicking Cancel...")
+                        cancel_btn.click(force=True)
+                        time.sleep(1)
+                        return True
+                except:
+                    pass
+                return False
+            
             # Wait specifically for "Post" button to be enabled.
-            # Post button usually says "Post" but has specific data attribute
-            # We look for ANY clickable button that says Post/Pubblica
             post_btn = upload_frame.locator('button:has-text("Post"), button:has-text("Pubblica")').first
             
-            log("4️⃣ Waiting for 'Post' button (Active)...")
+            log("4️⃣ Waiting for 'Post' button...")
             
-            # SCROLLING IS CRITICAL HERE:
-            # TikTok Studio puts the Post button at the bottom right. On 1080p height it might be off screen.
-            try: 
-                 page.mouse.wheel(0, 5000) # Mouse wheel better than evaluate scroll
-                 time.sleep(1)
-            except: pass
+            # NO SCROLLING - JS click works on off-screen elements
             
-            # Wait until something is active
+            # Wait until Post button is enabled
             ready_to_click = False
-            for i in range(40): # Wait up to 80 seconds (upload+check can be slow)
-                # Scroll again every few loops to keep it active
-                if i % 5 == 0:
-                     try: page.evaluate("window.scrollTo(0, document.body.scrollHeight)") 
-                     except: pass
+            for i in range(40): # Wait up to 80 seconds
+                # Check for Exit modal EVERY iteration
+                dismiss_exit_modal()
                 
-                # Check enablement
-                if post_btn.is_visible() and post_btn.is_enabled():
+                # Check if Post button exists and is enabled
+                if post_btn.count() > 0 and post_btn.is_enabled():
                     log("✅ Post button enabled.")
                     ready_to_click = True
                     break
                 
-                # Check upload progress text?
-                try:
-                    # Sometimes text like "Uploading... 45%" is visible.
-                    pass 
-                except: pass
-                
                 time.sleep(2)
             
-            # Even if Playwright thinks it's disabled, if it's red/visible it might be clickable via JS.
             if not ready_to_click:
-                log("⚠️ Post button might be disabled (Timeout). Attempting Force-Click anyway...")
-                # Scroll to it
-                try: post_btn.scroll_into_view_if_needed()
-                except: pass
-                path_warn = take_screenshot(page, "warn_post_disabled.png") 
+                log("⚠️ Post button timeout. Proceeding anyway...")
+                path_warn = take_screenshot(page, "warn_post_timeout.png") 
 
-            log("5️⃣ Clicking Post...")
+            log("5️⃣ Clicking Post (JS)...")
             # Retry click mechanism
             clicked_success = False
             for attempt in range(3):
-                # FIX: Check for blocking "Exit" modal VERY ROBUSTLY
-                try:
-                    # Check if modal is visible via specific text OR the red Exit button
-                    if page.locator('text="Are you sure you want to exit?"').is_visible() or \
-                       page.locator('div:has-text("Quit editing?")').is_visible() or \
-                       page.locator('button:has-text("Exit")').is_visible(): 
-                        
-                        log(f"⚠️ Exit modal detected (Attempt {attempt+1}). Pressing ESC/Cancel...")
-                        page.keyboard.press("Escape")
-                        time.sleep(1)
-                        
-                        # Extra safety: Click Cancel if still there
-                        cancel_btns = page.locator('button:has-text("Cancel"), button:has-text("Stay"), button:has-text("Annulla")')
-                        if cancel_btns.count() > 0 and cancel_btns.first.is_visible():
-                            cancel_btns.first.click(force=True)
-                            time.sleep(1)
-                except: pass
+                # Always try to dismiss modal first
+                dismiss_exit_modal()
 
                 # SCROLLING REMOVED on User Request: JS click handles off-screen elements.
 
