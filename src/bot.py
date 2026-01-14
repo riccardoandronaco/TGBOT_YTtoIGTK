@@ -1009,6 +1009,74 @@ async def autopilot_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🛑 **Pilota Automatico DISATTIVATO**")
 
+async def test_tiktok_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id, "🎬 **Test TikTok Flow**\nGenerazione video dummy (5s)...")
+    
+    dummy_path = os.path.join(DOWNLOAD_PATH, "test_dummy.mp4")
+    
+    # 1. Generate Dummy Video with ffmpeg
+    try:
+        # Create a simple red video with silence
+        # Using -y to overwrite
+        cmd = [
+            'ffmpeg', '-y', 
+            '-f', 'lavfi', '-i', 'color=c=red:s=720x1280:d=5',  # Vertical 9:16 RED
+            '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '5',
+            '-c:a', 'aac',
+            dummy_path
+        ]
+        # Run sync, but it's fast enough. Or use loop.run_in_executor if needed.
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        await context.bot.send_message(chat_id, f"❌ Errore ffmpeg: {e}\nAssicurati che ffmpeg sia installato.")
+        return
+
+    await context.bot.send_message(chat_id, "🚀 Avvio Upload Simulato (Real Browser)...")
+
+    # 2. Define Status Callback to echo to chat
+    loop = asyncio.get_running_loop()
+    
+    def status_callback(msg, screenshot=None):
+        # Fire and forget status update to Telegram
+        logger.info(f"CALLBACK: {msg}")
+        asyncio.run_coroutine_threadsafe(
+            context.bot.send_message(chat_id, f"ℹ️ {msg}"),
+            loop
+        )
+        if screenshot and os.path.exists(screenshot):
+             asyncio.run_coroutine_threadsafe(
+                context.bot.send_photo(chat_id, photo=open(screenshot, 'rb'), caption=f"📸 {msg}"),
+                loop
+             )
+
+    # 3. Run Upload
+    try:
+        # success, msg = tiktok_handler.upload_video(dummy_path, "Test Upload #bot_test", status_callback)
+        success, msg = await loop.run_in_executor(
+            None, 
+            tiktok_handler.upload_video, 
+            dummy_path, 
+            "Test Upload #bot_test", 
+            status_callback
+        )
+        
+        if success:
+            await context.bot.send_message(chat_id, f"✅ **TEST COMPLETATO**\nVideo caricato correttamente.\nMsg: {msg}")
+        else:
+            await context.bot.send_message(chat_id, f"❌ **TEST FALLITO**\nErrore: {msg}")
+            
+    except Exception as e:
+        await context.bot.send_message(chat_id, f"❌ Eccezione durante il test: {e}")
+    
+    # Cleanup
+    if os.path.exists(dummy_path):
+        os.remove(dummy_path)
+
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
@@ -1020,7 +1088,8 @@ async def post_init(application: Application):
         BotCommand("clearcache", "Svuota cartella download"),
         BotCommand("check", "Test Connettività/Ban"),
         BotCommand("update", "Aggiorna bot e Riavvia"),
-        BotCommand("reboot", "Riavvia Raspberry Pi")
+        BotCommand("reboot", "Riavvia Raspberry Pi"),
+        BotCommand("testtiktok", "Test rapido upload TikTok")
     ])
 
 if __name__ == '__main__':

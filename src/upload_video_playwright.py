@@ -424,15 +424,22 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             # Retry click mechanism
             clicked_success = False
             for attempt in range(3):
-                # FIX: Check for blocking "Exit" modal and dismiss it
-                # Often triggered by scrolling over "Back to TikTok" link
+                # FIX: Check for blocking "Exit" modal VERY ROBUSTLY
                 try:
-                    exit_modal = page.locator('div:has-text("Are you sure you want to exit?")').first
-                    if exit_modal.is_visible():
-                        log(f"⚠️ 'Exit' modal detected (Attempt {attempt+1}). Clicking Cancel...")
-                        # Click the Cancel button inside the modal
-                        page.locator('button:has-text("Cancel")').click()
+                    # Check if modal is visible via specific text OR the red Exit button
+                    if page.locator('text="Are you sure you want to exit?"').is_visible() or \
+                       page.locator('div:has-text("Quit editing?")').is_visible() or \
+                       page.locator('button:has-text("Exit")').is_visible(): 
+                        
+                        log(f"⚠️ Exit modal detected (Attempt {attempt+1}). Pressing ESC/Cancel...")
+                        page.keyboard.press("Escape")
                         time.sleep(1)
+                        
+                        # Extra safety: Click Cancel if still there
+                        cancel_btns = page.locator('button:has-text("Cancel"), button:has-text("Stay"), button:has-text("Annulla")')
+                        if cancel_btns.count() > 0 and cancel_btns.first.is_visible():
+                            cancel_btns.first.click()
+                            time.sleep(1)
                 except: pass
 
                 # FIX 2: Ensure we are not clicking the "Back to TikTok" link in the footer
