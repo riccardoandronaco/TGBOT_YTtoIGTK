@@ -289,18 +289,50 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 break
         
         # Try finding the input in main page or frame
-        file_input = upload_frame.locator('input[type="file"]')
+        # file_input = upload_frame.locator('input[type="file"]') # OLD DIRECT METHOD
         
         log("2️⃣ Uploading file...")
         try:
-            # Direct upload via input[type="file"]
-            # We assume the input exists on the page (even if hidden)
-            file_input.first.set_input_files(video_path)
+            # NEW ROBUST STRATEGY: Try File Chooser Trigger first, then fallback to direct input
+            
+            # Detect potential upload buttons
+            # We use a broad text matching to find the red button or the container
+            upload_btn = upload_frame.locator('button:has-text("Select video"), div[role="button"]:has-text("Select video"), span:has-text("Select video")').first
+            
+            # Check if button is visible (wait briefly)
+            can_click_button = False
+            try:
+                upload_btn.wait_for(state="visible", timeout=5000)
+                can_click_button = True
+            except:
+                log("   'Select video' button not immediately visible, searching broader...")
+                # Fallback: try to find the container description if button fails
+                try:
+                    upload_btn = upload_frame.locator('text="Select video"').first
+                    upload_btn.wait_for(state="visible", timeout=3000)
+                    can_click_button = True
+                except:
+                     log("   Broader search failed.")
+
+            if can_click_button:
+                log("   Strategy A: Clicking 'Select video' to trigger File Chooser...")
+                try:
+                    with page.expect_file_chooser(timeout=10000) as fc_info:
+                        upload_btn.click()
+                    file_chooser = fc_info.value
+                    file_chooser.set_files(video_path)
+                    log(f"   File set via FileChooser. Screenshot: {take_screenshot(page, '2_file_selected_fc.png')}")
+                except Exception as fc_e:
+                    log(f"   Strategy A failed ({fc_e}). Trying Strategy B (Direct Input)...")
+                    # Fallback to Strategy B
+                    upload_frame.locator('input[type="file"]').first.set_input_files(video_path)
+            else:
+                log("   Strategy B: Direct Input Injection (Button not found)...")
+                upload_frame.locator('input[type="file"]').first.set_input_files(video_path)
             
             # Wait a sec for upload interface to react
             time.sleep(5)
-            path_2 = take_screenshot(page, "2_file_selected.png")
-            log(f"   File set successfully. Screenshot: {path_2}")
+            # path_2 = take_screenshot(page, "2_file_selected.png") # Already took one above or handled
             
         except Exception as e:
             logger.error(f"Failed to set input file: {e}")
