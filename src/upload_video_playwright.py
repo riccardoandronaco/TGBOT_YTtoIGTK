@@ -4,6 +4,7 @@ import pickle
 import time
 import logging
 import re
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,12 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
              # Ensure directory exists
              debug_dir = os.path.join(os.getcwd(), "debug_screens")
              os.makedirs(debug_dir, exist_ok=True)
-             path = os.path.join(debug_dir, name)
+             
+             # Add timestamp to filename
+             timestamp = datetime.now().strftime("%H%M%S")
+             base_name, ext = os.path.splitext(name)
+             timestamped_name = f"{timestamp}_{base_name}{ext}"
+             path = os.path.join(debug_dir, timestamped_name)
              
              # Try full page screenshot if possible (only works on Page objects, not Locators)
              try:
@@ -410,7 +416,36 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             take_screenshot(page, "3b_after_caption_check.png")
             
             # Wait specifically for "Post" button to be enabled.
-            post_btn = upload_frame.locator('button:has-text("Post"), button:has-text("Pubblica")').first
+            # Be VERY specific: look for the submit button, not any "Post" text
+            # TikTok Studio uses specific classes/attributes
+            post_btn = None
+            
+            # Try multiple specific selectors in order of preference
+            post_selectors = [
+                'button[type="submit"]:has-text("Post")',  # Submit button
+                'button[data-e2e="post_video_button"]',     # Data attribute
+                'div[class*="DraftEditor"] ~ button:has-text("Post")',  # Near caption
+                'button:has-text("Post"):not([disabled])',  # Enabled Post button
+            ]
+            
+            for sel in post_selectors:
+                try:
+                    btn = upload_frame.locator(sel).first
+                    if btn.count() > 0:
+                        post_btn = btn
+                        log(f"   Found Post button with selector: {sel}")
+                        break
+                except:
+                    continue
+            
+            # Fallback to generic
+            if not post_btn:
+                post_btn = upload_frame.locator('button:has-text("Post"), button:has-text("Pubblica")').last  # Use LAST instead of first
+                log("   Using fallback selector (last Post button)")
+            
+            # Debug: How many "Post" buttons are there?
+            all_post_btns = upload_frame.locator('button:has-text("Post")')
+            log(f"   DEBUG: Found {all_post_btns.count()} buttons with 'Post' text")
             
             log("4️⃣ Waiting for 'Post' button...")
             
@@ -453,6 +488,14 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                     take_screenshot(page, f"5_modal_dismissed_attempt_{attempt+1}.png")
 
                 try:
+                    # DEBUG: Log what we're about to click
+                    try:
+                        btn_text = post_btn.text_content()
+                        btn_tag = post_btn.evaluate("el => el.tagName")
+                        btn_class = post_btn.evaluate("el => el.className")
+                        log(f"   DEBUG: Clicking element: <{btn_tag} class='{btn_class}'>{btn_text}</>")
+                    except: pass
+                    
                     # Prefer JS click to bypass overlays or 'disabled' checks
                     post_btn.evaluate("node => node.click()")
                     log(f"   Click attempt {attempt+1} (JS)...")
