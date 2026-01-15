@@ -515,16 +515,14 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
             take_screenshot(page, "3b_after_caption_check.png")
             
             # Wait specifically for "Post" button to be enabled.
-            # Be VERY specific: look for the submit button, not any "Post" text
-            # TikTok Studio uses specific classes/attributes
+            # Use SPECIFIC selector to avoid matching "Posts" in sidebar
             post_btn = None
             
             # Try multiple specific selectors in order of preference
             post_selectors = [
+                'button[data-e2e="post_video_button"]',     # BEST: Unique data attribute
                 'button[type="submit"]:has-text("Post")',  # Submit button
-                'button[data-e2e="post_video_button"]',     # Data attribute
-                'div[class*="DraftEditor"] ~ button:has-text("Post")',  # Near caption
-                'button:has-text("Post"):not([disabled])',  # Enabled Post button
+                'button:text-is("Post")',                   # Exact text match (not "Posts")
             ]
             
             for sel in post_selectors:
@@ -532,19 +530,15 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                     btn = upload_frame.locator(sel).first
                     if btn.count() > 0:
                         post_btn = btn
-                        log(f"   Found Post button with selector: {sel}")
+                        log(f"   Found Post button: {sel}")
                         break
                 except:
                     continue
             
-            # Fallback to generic
+            # Fallback - use exact text match
             if not post_btn:
-                post_btn = upload_frame.locator('button:has-text("Post"), button:has-text("Pubblica")').last  # Use LAST instead of first
-                log("   Using fallback selector (last Post button)")
-            
-            # Debug: How many "Post" buttons are there?
-            all_post_btns = upload_frame.locator('button:has-text("Post")')
-            log(f"   DEBUG: Found {all_post_btns.count()} buttons with 'Post' text")
+                post_btn = upload_frame.get_by_role("button", name="Post", exact=True)
+                log("   Using fallback: exact 'Post' button")
             
             log("4️⃣ Waiting for 'Post' button...")
             
@@ -707,8 +701,8 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                      msg = "Uploaded (Toast confirmed)"
                 
                 else:
-                    # Check if we are still on the upload form
-                    is_still_uploading = upload_frame.locator('button:has-text("Post")').is_visible() if upload_frame else False
+                    # Check if we are still on the upload form (use specific selector)
+                    is_still_uploading = upload_frame.locator('button[data-e2e="post_video_button"]').is_visible() if upload_frame else False
                     
                     if not is_still_uploading and "upload" not in page.url:
                         log("✅ URL changed from upload page. Assuming success.")
