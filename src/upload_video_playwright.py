@@ -590,27 +590,67 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
             if not ready_to_click:
                 log("⚠️ Post button timeout. Proceeding anyway...")
 
-            log("5️⃣ Clicking Post...")
+            log("5️⃣ Clicking Post button...")
             
             # Dismiss any modal first
             dismiss_modals()
             
-            # Single click attempt
-            try:
-                post_btn.click(force=True, timeout=5000)
-                log("   Clicked!")
-            except Exception as click_err:
-                log(f"   Click failed ({click_err}), trying JS...")
+            # ROBUST POST BUTTON CLICK - Multiple strategies
+            post_clicked = False
+            
+            # Strategy 1: Find the red Post button specifically by its unique attributes
+            post_button_selectors = [
+                'button[data-e2e="post_video_button"]',
+                'button.Button__root--type-primary:has-text("Post")',
+                'button[type="button"]:has-text("Post"):not(:has-text("Posts"))',
+            ]
+            
+            for sel in post_button_selectors:
                 try:
-                    post_btn.evaluate("node => node.click()")
+                    btn = page.locator(sel).first
+                    if btn.count() > 0 and btn.is_visible():
+                        log(f"   Found Post button: {sel}")
+                        
+                        # Scroll it into view
+                        btn.scroll_into_view_if_needed()
+                        time.sleep(0.5)
+                        
+                        # Get bounding box for coordinate click
+                        box = btn.bounding_box()
+                        if box:
+                            # Click at center of button using coordinates (most reliable)
+                            center_x = box['x'] + box['width'] / 2
+                            center_y = box['y'] + box['height'] / 2
+                            log(f"   Clicking at coordinates ({center_x:.0f}, {center_y:.0f})")
+                            page.mouse.click(center_x, center_y)
+                            post_clicked = True
+                            break
+                except Exception as e:
+                    log(f"   Selector {sel} failed: {e}")
+                    continue
+            
+            # Strategy 2: If coordinate click failed, try direct methods
+            if not post_clicked:
+                log("   Trying direct click methods...")
+                try:
+                    # Try the original post_btn
+                    post_btn.click(force=True, timeout=3000)
+                    post_clicked = True
+                    log("   Direct click succeeded!")
                 except:
-                    pass
-
+                    try:
+                        # JS click
+                        post_btn.evaluate("node => node.click()")
+                        post_clicked = True
+                        log("   JS click succeeded!")
+                    except:
+                        log("   All click methods failed!")
+            
             # Wait and check for success URL
-            log("   Waiting for redirect...")
+            log("   Waiting for redirect (up to 15s)...")
             clicked_success = False
             
-            for i in range(10):  # Check for up to 10 seconds
+            for i in range(15):  # Check for up to 15 seconds
                 time.sleep(1)
                 current_url = page.url
                 
@@ -620,12 +660,30 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                     break
                 
                 # Handle "Post now" modal if it appears
-                if page.locator('button:has-text("Post now")').is_visible():
-                    log("   'Post now' modal - clicking...")
-                    page.locator('button:has-text("Post now")').click(force=True)
-                elif page.locator('button:has-text("Pubblica ora")').is_visible():
-                    log("   'Pubblica ora' modal - clicking...")
-                    page.locator('button:has-text("Pubblica ora")').click(force=True)
+                try:
+                    post_now_btn = page.locator('button:has-text("Post now"), button:has-text("Pubblica ora")').first
+                    if post_now_btn.count() > 0 and post_now_btn.is_visible():
+                        log("   'Post now' modal - clicking...")
+                        post_now_btn.click(force=True)
+                        time.sleep(2)
+                except:
+                    pass
+            
+            # If still not redirected, try clicking Post again
+            if not clicked_success:
+                log("   ⚠️ No redirect yet. Trying Post button again...")
+                try:
+                    post_btn_retry = page.locator('button[data-e2e="post_video_button"]').first
+                    if post_btn_retry.count() > 0 and post_btn_retry.is_visible():
+                        box = post_btn_retry.bounding_box()
+                        if box:
+                            page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                            time.sleep(5)
+                            if SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
+                                log("✅ Second click worked!")
+                                clicked_success = True
+                except:
+                    pass
             
             # 5. Handle "Continue to post?" Modal (Content check)
             # This modal appears if TikTok is still checking the video but allows posting anyway.
@@ -709,33 +767,35 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                         success = True
                         msg = "Uploaded (Heuristic: URL Changed)"
                     else:
-                        take_screenshot(page, "stuck_on_upload.png")
-                        log("⚠️ Still on upload page. Checking for Drafts...")
-                    
-                        # Draft Fallback
-                        draft_locators = ['button:has-text("Draft")', 'span:has-text("Save as draft")']
-                        draft_clicked = False
-                        for sel in draft_locators:
-                            d_btn = upload_frame.locator(sel).first
-                            if d_btn.count() > 0 and d_btn.is_visible():
-                                log(f"Found Draft button ({sel}). Clicking...")
-                                try:
-                                    d_btn.click()
-                                    time.sleep(2)
-                                    success = True
-                                    msg = "Saved as Draft (Post failed)"
-                                    draft_clicked = True
-                                    break
-                                except Exception as de:
-                                    log(f"Failed to click Draft: {de}")
+                        # LAST RESORT: Try clicking Post button one more time with all methods
+                        log("⚠️ Still on upload page. Final Post attempt...")
+                        take_screenshot(page, "final_attempt.png")
                         
-                        if not draft_clicked:
+                        final_success = False
+                        try:
+                            # Find the red Post button
+                            final_btn = page.locator('button[data-e2e="post_video_button"]').first
+                            if final_btn.count() > 0 and final_btn.is_visible():
+                                # Try coordinate click
+                                box = final_btn.bounding_box()
+                                if box:
+                                    log(f"   Final click at ({box['x'] + box['width']/2:.0f}, {box['y'] + box['height']/2:.0f})")
+                                    page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                    time.sleep(5)
+                                    
+                                    if SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
+                                        log("✅ Final click worked!")
+                                        final_success = True
+                                        success = True
+                                        msg = "Uploaded successfully (final attempt)"
+                        except Exception as fe:
+                            log(f"   Final attempt failed: {fe}")
+                        
+                        if not final_success:
                             err_path = take_screenshot(page, "err_final_fail.png")
-                            log("❌ Post verification failed AND No Draft option found.", err_path)
+                            log("❌ All Post attempts failed.", err_path)
                             success = False
-                            msg = "Upload Verify Failed & No Draft"
-                            success = False
-                            msg = "Upload Verify Failed & No Draft"
+                            msg = "Post button click failed"
             
             browser.close()
             return (success, msg)
