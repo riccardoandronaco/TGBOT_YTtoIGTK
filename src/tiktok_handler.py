@@ -167,7 +167,7 @@ class TikTokHandler:
                 video_path=video_path,
                 caption=description,
                 cookie_path=self.cookies_path,
-                headless=True, # Running headless by default
+                # headless controlled by TIKTOK_HEADLESS env variable
                 status_callback=status_callback
             )
             

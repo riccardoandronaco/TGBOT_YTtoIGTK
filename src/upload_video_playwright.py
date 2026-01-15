@@ -5,8 +5,14 @@ import time
 import logging
 import re
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Headless mode from ENV (default: True)
+HEADLESS_MODE = os.getenv('TIKTOK_HEADLESS', 'true').lower() in ('true', '1', 'yes')
 
 def load_cookies(cookie_path):
     """
@@ -66,10 +72,16 @@ def load_cookies(cookie_path):
     
     return cookies
 
-def upload_video(video_path, caption, cookie_path, headless=True, status_callback=None):
+def upload_video(video_path, caption, cookie_path, headless=None, status_callback=None):
     """
     Robust upload using Playwright.
     """
+    # Use env variable if headless not explicitly passed
+    if headless is None:
+        headless = HEADLESS_MODE
+    
+    print(f"🔍 DEBUG: HEADLESS_MODE={HEADLESS_MODE}, headless={headless}")
+    
     def log(msg, screenshot_path=None):
         logger.info(msg)
         if status_callback:
@@ -416,6 +428,62 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
         # Usually looking for the 'Caption' text box appearing is a good sign the previous step worked
         log("3️⃣ Waiting for processing (Caption area)...")
         
+        # HELPER: Function to dismiss any blocking modals/overlays (defined early)
+        def dismiss_modals():
+            """Check and dismiss any blocking modals (Exit, Got it, Joyride tour, etc.)."""
+            dismissed = False
+            try:
+                # JOYRIDE TOUR OVERLAY - This blocks everything!
+                # Remove it via JavaScript if present
+                joyride = page.locator('#react-joyride-portal, .react-joyride__overlay, [data-test-id="overlay"]').first
+                if joyride.count() > 0:
+                    logger.info("🚨 Joyride tour overlay detected! Removing...")
+                    page.evaluate('''() => {
+                        const portal = document.getElementById('react-joyride-portal');
+                        if (portal) portal.remove();
+                        const overlays = document.querySelectorAll('.react-joyride__overlay, [data-test-id="overlay"]');
+                        overlays.forEach(el => el.remove());
+                    }''')
+                    time.sleep(0.5)
+                    dismissed = True
+                
+                # "Got it" / "Skip" buttons for tutorials
+                for btn_text in ["Got it", "Skip", "Next", "Close"]:
+                    btn = page.locator(f'button:has-text("{btn_text}")').first
+                    if btn.count() > 0 and btn.is_visible():
+                        logger.info(f"🚨 '{btn_text}' button detected! Clicking...")
+                        btn.click(force=True)
+                        time.sleep(0.5)
+                        dismissed = True
+                
+                # Exit modal - Cancel button in dialog
+                cancel_btn = page.locator('div[role="dialog"] button:has-text("Cancel"), div[class*="modal"] button:has-text("Cancel")').first
+                if cancel_btn.count() > 0 and cancel_btn.is_visible():
+                    logger.info("🚨 Exit modal detected (dialog)! Clicking Cancel...")
+                    cancel_btn.click(force=True)
+                    time.sleep(1)
+                    dismissed = True
+                
+                # Exit button visible - click Cancel
+                if page.locator('button:has-text("Exit")').is_visible():
+                    cancel_btn = page.locator('button:has-text("Cancel")').first
+                    if cancel_btn.is_visible():
+                        logger.info("🚨 Exit button visible! Clicking Cancel...")
+                        cancel_btn.click(force=True)
+                        time.sleep(1)
+                        dismissed = True
+                
+                # "Are you sure you want to exit?" - ESC key
+                if page.locator('text="Are you sure you want to exit?"').is_visible():
+                    logger.info("🚨 Exit text detected! Pressing Escape...")
+                    page.keyboard.press("Escape")
+                    time.sleep(1)
+                    dismissed = True
+                    
+            except Exception as e:
+                logger.debug(f"dismiss_modals error: {e}")
+            return dismissed
+        
         # Wait for the editor container or caption input
         # The caption editor is inside a div with 'DraftEditor' usually
         try:
@@ -423,9 +491,12 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             caption_locator = upload_frame.locator('.public-DraftEditor-content')
             caption_locator.wait_for(state="visible", timeout=60000)
             
+            # DISMISS ANY BLOCKING OVERLAYS BEFORE CLICKING
+            dismiss_modals()
+            
             # Fill Caption
             # log("Setting caption...") # Too verbose
-            caption_locator.click()
+            caption_locator.click(force=True)  # force=True ignores overlay
             # Clear existing if any (filename usually auto-filled)
             # Make sure to wait a bit
             time.sleep(1)
@@ -439,40 +510,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             path_3 = take_screenshot(page, "3_caption_set.png")
             log("   Caption set.")
             
-            # HELPER: Function to dismiss "Exit" modal if present
-            def dismiss_exit_modal():
-                """Check and dismiss the Exit confirmation modal if visible."""
-                try:
-                    # Method 1: Direct click on Cancel button in modal
-                    cancel_btn = page.locator('div[role="dialog"] button:has-text("Cancel"), div[class*="modal"] button:has-text("Cancel")').first
-                    if cancel_btn.count() > 0 and cancel_btn.is_visible():
-                        logger.info("🚨 Exit modal detected (dialog)! Clicking Cancel...")
-                        cancel_btn.click(force=True)
-                        time.sleep(1)
-                        return True
-                    
-                    # Method 2: Look for any visible Cancel next to an Exit button
-                    if page.locator('button:has-text("Exit")').is_visible():
-                        cancel_btn = page.locator('button:has-text("Cancel")').first
-                        if cancel_btn.is_visible():
-                            logger.info("🚨 Exit button visible! Clicking Cancel...")
-                            cancel_btn.click(force=True)
-                            time.sleep(1)
-                            return True
-                    
-                    # Method 3: ESC key as last resort
-                    if page.locator('text="Are you sure you want to exit?"').is_visible():
-                        logger.info("🚨 Exit text detected! Pressing Escape...")
-                        page.keyboard.press("Escape")
-                        time.sleep(1)
-                        return True
-                        
-                except Exception as e:
-                    logger.debug(f"dismiss_exit_modal error: {e}")
-                return False
-            
             # Check for modal RIGHT AFTER caption is set
-            dismiss_exit_modal()
+            dismiss_modals()
             take_screenshot(page, "3b_after_caption_check.png")
             
             # Wait specifically for "Post" button to be enabled.
@@ -529,17 +568,19 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                 time.sleep(2)
             
             # Extra wait for TikTok to finish processing
-            time.sleep(3)
+            time.sleep(2)
             
             # NO SCROLLING - JS click works on off-screen elements
             
-            # Wait until Post button is enabled
+            # SUCCESS URL to check after each click
+            SUCCESS_URL = "https://www.tiktok.com/tiktokstudio/content"
+            
+            # Wait until Post button is enabled (OPTIMIZED: reduced from 80s to 30s)
             ready_to_click = False
-            for i in range(40): # Wait up to 80 seconds
-                # Check for Exit modal EVERY iteration - BEFORE anything else
-                if dismiss_exit_modal():
+            for i in range(15): # Wait up to 30 seconds
+                # Check for modals EVERY iteration - BEFORE anything else
+                if dismiss_modals():
                     log(f"   Modal dismissed at iteration {i}")
-                    take_screenshot(page, f"modal_dismissed_{i}.png")
                 
                 # Check if Post button exists and is enabled
                 try:
@@ -554,62 +595,43 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             
             if not ready_to_click:
                 log("⚠️ Post button timeout. Proceeding anyway...")
-                path_warn = take_screenshot(page, "warn_post_timeout.png") 
 
-            log("5️⃣ Clicking Post (JS)...")
-            # Take screenshot BEFORE clicking
-            take_screenshot(page, "5_before_post_click.png")
+            log("5️⃣ Clicking Post...")
             
-            # Retry click mechanism
-            clicked_success = False
-            for attempt in range(3):
-                # Always try to dismiss modal first
-                if dismiss_exit_modal():
-                    log(f"   Modal dismissed before click attempt {attempt+1}")
-                    time.sleep(1)
-                    take_screenshot(page, f"5_modal_dismissed_attempt_{attempt+1}.png")
-
+            # Dismiss any modal first
+            dismiss_modals()
+            
+            # Single click attempt
+            try:
+                post_btn.click(force=True, timeout=5000)
+                log("   Clicked!")
+            except Exception as click_err:
+                log(f"   Click failed ({click_err}), trying JS...")
                 try:
-                    # DEBUG: Log what we're about to click
-                    try:
-                        btn_text = post_btn.text_content()
-                        btn_tag = post_btn.evaluate("el => el.tagName")
-                        btn_class = post_btn.evaluate("el => el.className")
-                        log(f"   DEBUG: Clicking element: <{btn_tag} class='{btn_class}'>{btn_text}</>")
-                    except: pass
-                    
-                    # Try STANDARD click first (more reliable), then JS as fallback
-                    try:
-                        post_btn.click(timeout=5000)
-                        log(f"   Click attempt {attempt+1} (Standard)...")
-                    except Exception as std_click_err:
-                        log(f"   Standard click failed ({std_click_err}), trying JS...")
-                        post_btn.evaluate("node => node.click()")
-                        log(f"   Click attempt {attempt+1} (JS)...")
-                except Exception as click_err:
-                    log(f"   JS Click failed, trying standard click: {click_err}")
-                    try:
-                        post_btn.click(force=True)
-                    except Exception as e2:
-                        log(f"   Standard click failed: {e2}")
+                    post_btn.evaluate("node => node.click()")
+                except:
+                    pass
 
-                time.sleep(5)
+            # Wait and check for success URL
+            log("   Waiting for redirect...")
+            clicked_success = False
+            
+            for i in range(10):  # Check for up to 10 seconds
+                time.sleep(1)
+                current_url = page.url
                 
-                # Check for "Post now" / "Pubblica ora" modal (sometimes appears)
-                # This modal interrupts the flow, asking to confirm posting before checks are done.
-                if page.locator('button:has-text("Post now")').is_visible() or \
-                   page.locator('button:has-text("Pubblica ora")').is_visible():
-                     log("⚠️ 'Post now' modal detected immediately.")
-                     path_mod = take_screenshot(page, "modal_detected.png") 
-                     break
-
-                # Check if we moved to success page
-                if "Manage your posts" in page.content() or "uploaded" in page.content():
+                if SUCCESS_URL in current_url or "tiktokstudio/content" in current_url:
+                    log(f"✅ Success! Redirected to: {current_url}")
                     clicked_success = True
                     break
                 
-                path_att = take_screenshot(page, f"click_attempt_{attempt+1}.png")
-                log(f"🔄 Clicked Post (Attempt {attempt+1}), checking response...")
+                # Handle "Post now" modal if it appears
+                if page.locator('button:has-text("Post now")').is_visible():
+                    log("   'Post now' modal - clicking...")
+                    page.locator('button:has-text("Post now")').click(force=True)
+                elif page.locator('button:has-text("Pubblica ora")').is_visible():
+                    log("   'Pubblica ora' modal - clicking...")
+                    page.locator('button:has-text("Pubblica ora")').click(force=True)
             
             # 5. Handle "Continue to post?" Modal (Content check)
             # This modal appears if TikTok is still checking the video but allows posting anyway.
@@ -657,78 +679,55 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
             success = False
             msg = "Unknown Error"
 
+            # FAST CHECK: Already on success page?
+            if clicked_success or SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
+                log("✅ Upload confirmed (URL check)!")
+                success = True
+                msg = "Uploaded successfully"
+                browser.close()
+                return (success, msg)
+
             try:
-                # Primary success check
-                upload_frame.wait_for_selector('text=Manage your posts', timeout=30000)
-                path_succ = take_screenshot(page, "success_page.png")
+                # Primary success check - wait briefly
+                upload_frame.wait_for_selector('text=Manage your posts', timeout=10000)
                 log("✅ Upload confirmed (found 'Manage your posts')!")
                 success = True
                 msg = "Uploaded successfully"
             except:
-                # Primary success failed. 
-                # DANGEROUS: Do NOT trust generic "uploaded" text as it appears in the header "Upload video"
+                # Check URL again
+                if SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
+                    log("✅ Upload confirmed (URL redirect)!")
+                    success = True
+                    msg = "Uploaded successfully"
                 
-                log("⚠️ 'Manage your posts' not found. Checking strict alternatives...")
-                
-                # Check for "Post published" toast or similar strictly
-                if page.locator('div:has-text("Post published")').count() > 0 or \
-                   upload_frame.locator('div:has-text("Post published")').count() > 0:
-                     path_toast = take_screenshot(page, "toast_success.png")
+                # Check for "Post published" toast
+                elif page.locator('div:has-text("Post published")').count() > 0:
                      log("✅ Found 'Post published' toast.")
                      success = True
                      msg = "Uploaded (Toast confirmed)"
                 
-                # Check for Profile verification (Requested by User)
-                # Only if we suspect it might have worked (e.g. page changed) or specific request
-                # To be safe, if we didn't see the Toast, we should verify on profile if we are NOT on the upload page anymore
                 else:
                     # Check if we are still on the upload form
-                    is_still_uploading = False
-                    try:
-                         if upload_frame.locator('button:has-text("Post")').is_visible():
-                             is_still_uploading = True
-                    except: 
-                        pass
+                    is_still_uploading = upload_frame.locator('button:has-text("Post")').is_visible() if upload_frame else False
                     
-                    if not is_still_uploading:
-                        log("📍 Page changed but no confirmation. Skipping heavy profile verification on RPi.")
-                        # RPi OPTIMIZATION: Trust that it worked if page changed and no errors, 
-                        # or at least don't risk another crash by reloading profile.
-                        if "upload" not in page.url:
-                             log("✅ URL changed from upload page. Assuming success.")
-                             success = True
-                             msg = "Uploaded (Heuristic: URL Changed)"
-                        else:
-                             log("⚠️ URL still on upload, but button gone/changed. Unsure.")
-                             take_screenshot(page, "warn_ambiguous_success.png")
-                        
-                        # DISABLED FOR PERFORMANCE:
-                        # try:
-                        #     # Go to profile to verify
-                        #     page.goto("https://www.tiktok.com/profile", wait_until='domcontentloaded')
-                        # ... (removed heavy profile check)
-                    
+                    if not is_still_uploading and "upload" not in page.url:
+                        log("✅ URL changed from upload page. Assuming success.")
+                        success = True
+                        msg = "Uploaded (Heuristic: URL Changed)"
                     else:
                         take_screenshot(page, "stuck_on_upload.png")
                         log("⚠️ Still on upload page. Checking for Drafts...")
                     
                         # Draft Fallback
-                        # Try to find a button with "Draft" text (e.g. "Save as draft")
-                        # Heuristic search for buttons containing "Draft"
-                        draft_locators = [
-                            'button:has-text("Draft")',
-                            'div[role="button"]:has-text("Draft")', 
-                            'span:has-text("Save as draft")'
-                        ]
-                        
+                        draft_locators = ['button:has-text("Draft")', 'span:has-text("Save as draft")']
                         draft_clicked = False
                         for sel in draft_locators:
                             d_btn = upload_frame.locator(sel).first
                             if d_btn.count() > 0 and d_btn.is_visible():
-                                log(f"found Draft button ({sel}). Clicking...")
+                                log(f"Found Draft button ({sel}). Clicking...")
                                 try:
                                     d_btn.click()
-                                    time.sleep(3)
+                                    time.sleep(2)
                                     success = True
                                     msg = "Saved as Draft (Post failed)"
                                     draft_clicked = True
@@ -739,6 +738,8 @@ def upload_video(video_path, caption, cookie_path, headless=True, status_callbac
                         if not draft_clicked:
                             err_path = take_screenshot(page, "err_final_fail.png")
                             log("❌ Post verification failed AND No Draft option found.", err_path)
+                            success = False
+                            msg = "Upload Verify Failed & No Draft"
                             success = False
                             msg = "Upload Verify Failed & No Draft"
             

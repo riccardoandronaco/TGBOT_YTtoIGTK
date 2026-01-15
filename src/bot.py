@@ -44,6 +44,29 @@ def is_authorized(user_id):
         return True # If no list is provided, allow everyone (NOT RECOMMENDED for private bots)
     return user_id in ALLOWED_USER_IDS
 
+# Helper to truncate caption for TikTok (max 2200 characters)
+def truncate_caption(text, max_length=2200):
+    """Truncate caption to fit TikTok's limit, preserving hashtags at the end."""
+    if len(text) <= max_length:
+        return text
+    # Find hashtags at the end
+    hashtags = ""
+    if "#" in text:
+        # Extract all hashtags
+        parts = text.split("#")
+        base_text = parts[0].strip()
+        hashtags = " " + " ".join(["#" + p.strip() for p in parts[1:] if p.strip()])
+    else:
+        base_text = text
+    
+    # Calculate how much space we have for base text
+    available = max_length - len(hashtags) - 3  # -3 for "..."
+    if available < 50:
+        # Not enough space, just hard truncate
+        return text[:max_length-3] + "..."
+    
+    return base_text[:available] + "..." + hashtags
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         await update.message.reply_text("Non sei autorizzato ad usare questo bot.")
@@ -532,7 +555,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_caption(caption="🚀 Inizio pubblicazione su TUTTI i canali...")
         
         loop = asyncio.get_running_loop()
-        caption = f"{title} #shorts"
+        caption = truncate_caption(f"{title} #shorts")
         errors = []
 
         # 1. Instagram
@@ -620,7 +643,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             loop = asyncio.get_running_loop()
-            caption = f"{title} #shorts"
+            caption = truncate_caption(f"{title} #shorts")
             
             # Ensure login and Upload
             await loop.run_in_executor(None, ig_handler.login)
@@ -649,7 +672,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             loop = asyncio.get_running_loop()
-            caption = f"{title} #shorts"
+            caption = truncate_caption(f"{title} #shorts")
 
             # Callback to update message and send debug screenshots
             def progress_callback(status_text, screenshot_path=None):
