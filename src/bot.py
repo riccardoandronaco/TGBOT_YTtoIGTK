@@ -890,11 +890,12 @@ async def draft_tiktok_batch(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE, max_uploads: int):
     """
     Esegue il batch upload di video su TikTok come Draft.
+    Un messaggio per video YouTube + un messaggio stato che si aggiorna.
     """
     query = update.callback_query
     chat_id = update.effective_chat.id
     
-    await query.edit_message_text(f"🎬 **TikTok Draft Batch**\nCarico {max_uploads} video come Draft...")
+    await query.edit_message_text(f"🎬 **TikTok Draft Batch**\nCarico {max_uploads} video come Draft...", parse_mode='Markdown')
     
     try:
         loop = asyncio.get_running_loop()
@@ -904,8 +905,6 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         for i in range(1, max_uploads + 1):
             # Find oldest unprocessed video for TikTok
-            await context.bot.send_message(chat_id, f"🔍 [{i}/{max_uploads}] Cerco video non pubblicato...")
-            
             video_url = await loop.run_in_executor(
                 None,
                 yt_handler.get_oldest_unprocessed_video,
@@ -918,10 +917,21 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await context.bot.send_message(chat_id, f"✅ Nessun altro video da caricare!")
                 break
             
+            # Send YouTube link message
+            await context.bot.send_message(
+                chat_id, 
+                f"🎬 **[{i}/{max_uploads}]** {video_url}",
+                parse_mode='Markdown',
+                disable_web_page_preview=False
+            )
+            
+            # Create status message that will be updated
+            status_msg = await context.bot.send_message(chat_id, "⏳ Inizializzazione...")
+            
             video_id = None
             try:
                 # Download video
-                await context.bot.send_message(chat_id, f"📥 [{i}/{max_uploads}] Scarico video...")
+                await status_msg.edit_text("📥 Download in corso...")
                 
                 video_info = await loop.run_in_executor(None, yt_handler.download_video, video_url)
                 
@@ -930,28 +940,31 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
                 title = video_info.get('title', 'Unknown')
                 
                 if not video_path or not os.path.exists(video_path):
-                    await context.bot.send_message(chat_id, f"❌ [{i}/{max_uploads}] Download fallito")
+                    await status_msg.edit_text(f"❌ Download fallito!")
                     if video_id:
                         fail_ids.append(video_id)
                     continue
                 
-                await context.bot.send_message(chat_id, f"📦 [{i}/{max_uploads}] {title[:40]}...")
+                await status_msg.edit_text(f"📦 Scaricato: {title[:50]}...")
                 
                 # Caption
                 caption = truncate_caption(f"{title} #shorts")
                 
-                # Status callback
+                # Status callback - updates the same message
+                last_status = {"text": ""}
                 def status_cb(msg, screenshot=None):
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            context.bot.send_message(chat_id, f"   📝 {msg}"),
-                            loop
-                        )
-                    except:
-                        pass
+                    if msg != last_status["text"]:
+                        last_status["text"] = msg
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                status_msg.edit_text(f"📤 Upload TikTok...\n📝 {msg}"),
+                                loop
+                            )
+                        except:
+                            pass
                 
                 # Upload to TikTok
-                await context.bot.send_message(chat_id, f"📤 [{i}/{max_uploads}] Carico su TikTok Draft...")
+                await status_msg.edit_text("📤 Caricamento su TikTok Draft...")
                 
                 result = await loop.run_in_executor(
                     None,
@@ -966,19 +979,19 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
                 
                 if success:
                     history_handler.add(video_id, "tiktok")
-                    await context.bot.send_message(chat_id, f"✅ [{i}/{max_uploads}] Salvato come Draft!")
+                    await status_msg.edit_text(f"✅ Salvato come Draft!\n`{video_id}`", parse_mode='Markdown')
                     success_ids.append(video_id)
                 else:
-                    await context.bot.send_message(chat_id, f"❌ [{i}/{max_uploads}] Errore: {msg}")
+                    await status_msg.edit_text(f"❌ Errore: {msg}")
                     fail_ids.append(video_id)
                 
                 # Small pause between uploads
                 if i < max_uploads:
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
                     
             except Exception as e:
                 logger.error(f"Draft batch error for video: {e}")
-                await context.bot.send_message(chat_id, f"❌ [{i}/{max_uploads}] Eccezione: {e}")
+                await status_msg.edit_text(f"❌ Eccezione: {e}")
                 if video_id:
                     fail_ids.append(video_id)
         
