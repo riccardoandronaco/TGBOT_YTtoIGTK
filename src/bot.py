@@ -44,6 +44,18 @@ def is_authorized(user_id):
         return True # If no list is provided, allow everyone (NOT RECOMMENDED for private bots)
     return user_id in ALLOWED_USER_IDS
 
+# Helper to escape special characters for Telegram Markdown
+def escape_md(text):
+    """Escape special Markdown characters for Telegram."""
+    if not text:
+        return ""
+    # Characters that need escaping in Markdown: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    result = str(text)
+    for char in escape_chars:
+        result = result.replace(char, f'\\{char}')
+    return result
+
 # Helper to truncate caption for TikTok (max 2200 characters)
 def truncate_caption(text, max_length=2200):
     """Truncate caption to fit TikTok's limit, preserving hashtags at the end."""
@@ -914,14 +926,13 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             
             if not video_url:
-                await context.bot.send_message(chat_id, f"✅ Nessun altro video da caricare!")
+                await context.bot.send_message(chat_id, "✅ Nessun altro video da caricare!")
                 break
             
-            # Send YouTube link message
+            # Send YouTube link message (no Markdown to avoid URL parsing issues)
             await context.bot.send_message(
                 chat_id, 
-                f"🎬 **[{i}/{max_uploads}]** {video_url}",
-                parse_mode='Markdown',
+                f"🎬 [{i}/{max_uploads}] {video_url}",
                 disable_web_page_preview=False
             )
             
@@ -979,7 +990,7 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
                 
                 if success:
                     history_handler.add(video_id, "tiktok")
-                    await status_msg.edit_text(f"✅ Salvato come Draft!\n`{video_id}`", parse_mode='Markdown')
+                    await status_msg.edit_text(f"✅ Salvato come Draft!\n{video_id}")
                     success_ids.append(video_id)
                 else:
                     await status_msg.edit_text(f"❌ Errore: {msg}")
@@ -995,19 +1006,19 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if video_id:
                     fail_ids.append(video_id)
         
-        # Final report with video IDs
-        report = f"🏁 **Draft Batch Completato**\n\n"
-        report += f"✅ **Successi: {len(success_ids)}**\n"
+        # Final report with video IDs (no Markdown to avoid issues with special chars in IDs)
+        report = "🏁 Draft Batch Completato\n\n"
+        report += f"✅ Successi: {len(success_ids)}\n"
         if success_ids:
             for vid in success_ids:
-                report += f"   • `{vid}`\n"
+                report += f"   • {vid}\n"
         
-        report += f"\n❌ **Falliti: {len(fail_ids)}**\n"
+        report += f"\n❌ Falliti: {len(fail_ids)}\n"
         if fail_ids:
             for vid in fail_ids:
-                report += f"   • `{vid}`\n"
+                report += f"   • {vid}\n"
         
-        await context.bot.send_message(chat_id, report, parse_mode='Markdown')
+        await context.bot.send_message(chat_id, report)
         
     except Exception as e:
         logger.error(f"Draft batch critical error: {e}")
