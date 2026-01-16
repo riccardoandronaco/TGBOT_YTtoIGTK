@@ -514,37 +514,9 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
             dismiss_modals()
             take_screenshot(page, "3b_after_caption_check.png")
             
-            # Wait specifically for "Post" button to be enabled.
-            # Use SPECIFIC selector to avoid matching "Posts" in sidebar
-            post_btn = None
+            log("4️⃣ Waiting for video processing...")
             
-            # Try multiple specific selectors in order of preference
-            post_selectors = [
-                'button[data-e2e="post_video_button"]',     # BEST: Unique data attribute
-                'button[type="submit"]:has-text("Post")',  # Submit button
-                'button:text-is("Post")',                   # Exact text match (not "Posts")
-            ]
-            
-            for sel in post_selectors:
-                try:
-                    btn = upload_frame.locator(sel).first
-                    if btn.count() > 0:
-                        post_btn = btn
-                        log(f"   Found Post button: {sel}")
-                        break
-                except:
-                    continue
-            
-            # Fallback - use exact text match
-            if not post_btn:
-                post_btn = upload_frame.get_by_role("button", name="Post", exact=True)
-                log("   Using fallback: exact 'Post' button")
-            
-            log("4️⃣ Waiting for 'Post' button...")
-            
-            # Wait for video processing to complete BEFORE checking Post button
-            # Look for "Uploaded" indicator or progress bar completion
-            log("   Waiting for video processing...")
+            # Wait for video processing to complete
             for wait_i in range(30):  # Up to 60 seconds
                 try:
                     # Check if "Uploaded" text is visible (means processing done)
@@ -562,240 +534,68 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                 time.sleep(2)
             
             # Extra wait for TikTok to finish processing
-            time.sleep(2)
-            
-            # NO SCROLLING - JS click works on off-screen elements
-            
-            # SUCCESS URL to check after each click
-            SUCCESS_URL = "https://www.tiktok.com/tiktokstudio/content"
-            
-            # Wait until Post button is enabled (OPTIMIZED: reduced from 80s to 30s)
-            ready_to_click = False
-            for i in range(15): # Wait up to 30 seconds
-                # Check for modals EVERY iteration - BEFORE anything else
-                if dismiss_modals():
-                    log(f"   Modal dismissed at iteration {i}")
-                
-                # Check if Post button exists and is enabled
-                try:
-                    if post_btn.count() > 0 and post_btn.is_enabled():
-                        log("✅ Post button enabled.")
-                        ready_to_click = True
-                        break
-                except Exception as btn_err:
-                    logger.debug(f"Post button check error: {btn_err}")
-                
-                time.sleep(2)
-            
-            if not ready_to_click:
-                log("⚠️ Post button timeout. Proceeding anyway...")
-
-            log("5️⃣ Clicking Post button...")
+            time.sleep(3)
             
             # Dismiss any modal first
             dismiss_modals()
             
-            # ROBUST POST BUTTON CLICK - Multiple strategies
-            post_clicked = False
+            # 5️⃣ SAVE AS DRAFT DIRECTLY (Skip Post - more reliable on RPi)
+            log("5️⃣ Saving as Draft...")
+            take_screenshot(page, "saving_draft.png")
             
-            # Strategy 1: Find the red Post button specifically by its unique attributes
-            post_button_selectors = [
-                'button[data-e2e="post_video_button"]',
-                'button.Button__root--type-primary:has-text("Post")',
-                'button[type="button"]:has-text("Post"):not(:has-text("Posts"))',
+            draft_locators = [
+                'button:has-text("Save draft")',
+                'button:has-text("Salva bozza")',
+                'button:text-is("Save draft")',
+                'button[data-e2e="save_draft_button"]',
             ]
             
-            for sel in post_button_selectors:
-                try:
-                    btn = page.locator(sel).first
-                    if btn.count() > 0 and btn.is_visible():
-                        log(f"   Found Post button: {sel}")
-                        
-                        # Scroll it into view
-                        btn.scroll_into_view_if_needed()
-                        time.sleep(0.5)
-                        
-                        # Get bounding box for coordinate click
-                        box = btn.bounding_box()
-                        if box:
-                            # Click at center of button using coordinates (most reliable)
-                            center_x = box['x'] + box['width'] / 2
-                            center_y = box['y'] + box['height'] / 2
-                            log(f"   Clicking at coordinates ({center_x:.0f}, {center_y:.0f})")
-                            page.mouse.click(center_x, center_y)
-                            post_clicked = True
-                            break
-                except Exception as e:
-                    log(f"   Selector {sel} failed: {e}")
-                    continue
-            
-            # Strategy 2: If coordinate click failed, try direct methods
-            if not post_clicked:
-                log("   Trying direct click methods...")
-                try:
-                    # Try the original post_btn
-                    post_btn.click(force=True, timeout=3000)
-                    post_clicked = True
-                    log("   Direct click succeeded!")
-                except:
-                    try:
-                        # JS click
-                        post_btn.evaluate("node => node.click()")
-                        post_clicked = True
-                        log("   JS click succeeded!")
-                    except:
-                        log("   All click methods failed!")
-            
-            # Wait and check for success URL
-            log("   Waiting for redirect (up to 15s)...")
-            clicked_success = False
-            
-            for i in range(15):  # Check for up to 15 seconds
-                time.sleep(1)
-                current_url = page.url
-                
-                if SUCCESS_URL in current_url or "tiktokstudio/content" in current_url:
-                    log(f"✅ Success! Redirected to: {current_url}")
-                    clicked_success = True
-                    break
-                
-                # Handle "Post now" modal if it appears
-                try:
-                    post_now_btn = page.locator('button:has-text("Post now"), button:has-text("Pubblica ora")').first
-                    if post_now_btn.count() > 0 and post_now_btn.is_visible():
-                        log("   'Post now' modal - clicking...")
-                        post_now_btn.click(force=True)
-                        time.sleep(2)
-                except:
-                    pass
-            
-            # If still not redirected, try clicking Post again
-            if not clicked_success:
-                log("   ⚠️ No redirect yet. Trying Post button again...")
-                try:
-                    post_btn_retry = page.locator('button[data-e2e="post_video_button"]').first
-                    if post_btn_retry.count() > 0 and post_btn_retry.is_visible():
-                        box = post_btn_retry.bounding_box()
-                        if box:
-                            page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                            time.sleep(5)
-                            if SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
-                                log("✅ Second click worked!")
-                                clicked_success = True
-                except:
-                    pass
-            
-            # 5. Handle "Continue to post?" Modal (Content check)
-            # This modal appears if TikTok is still checking the video but allows posting anyway.
-            # Buttons: "Cancel", "Post now" (EN), "Pubblica ora" (IT)
-            try:
-                # We check the main page first as modals are often top-level.
-                # Defined strict selectors for the confirmation button
-                modal_selectors = [
-                    'button:has-text("Post now")',
-                    'button:has-text("Pubblica ora")'
-                ]
-                
-                found_modal_btn = None
-                
-                # Check Main Page
-                for sel in modal_selectors:
-                     b = page.locator(sel)
-                     if b.count() > 0 and b.is_visible():
-                         found_modal_btn = b
-                         log(f"⚠️ Content check modal detected (Main Page - {sel}). Clicking...", take_screenshot(page, "modal_main.png"))
-                         path_mod2 = take_screenshot(page, "modal_main.png")
-                         break
-                
-                # Check Iframe if not found
-                if not found_modal_btn:
-                     for sel in modal_selectors:
-                         b = upload_frame.locator(sel)
-                         if b.count() > 0 and b.is_visible():
-                             found_modal_btn = b
-                             log(f"⚠️ Content check modal detected (Frame - {sel}). Clicking...", take_screenshot(page, "modal_frame.png"))
-                if found_modal_btn:
-                    found_modal_btn.click()
-                    time.sleep(5) # Wait for it to vanish/process
-                else:
-                    # logger.info("No content check modal detected (or timed out), proceeding.")
-                    pass
-
-            except Exception as e:
-                logger.warning(f"Error handling potential modal: {e}") 
-            
-            # (Old modal handling block removed to prevent duplication)
-
-            # Wait for "Your video has been uploaded" or redirect or modal
-            # "Manage your posts" button usually appears
+            draft_clicked = False
             success = False
             msg = "Unknown Error"
-
-            # FAST CHECK: Already on success page?
-            if clicked_success or SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
-                log("✅ Upload confirmed (URL check)!")
-                success = True
-                msg = "Uploaded successfully"
-                browser.close()
-                return (success, msg)
-
-            try:
-                # Primary success check - wait briefly
-                upload_frame.wait_for_selector('text=Manage your posts', timeout=10000)
-                log("✅ Upload confirmed (found 'Manage your posts')!")
-                success = True
-                msg = "Uploaded successfully"
-            except:
-                # Check URL again
-                if SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
-                    log("✅ Upload confirmed (URL redirect)!")
-                    success = True
-                    msg = "Uploaded successfully"
-                
-                # Check for "Post published" toast
-                elif page.locator('div:has-text("Post published")').count() > 0:
-                     log("✅ Found 'Post published' toast.")
-                     success = True
-                     msg = "Uploaded (Toast confirmed)"
-                
-                else:
-                    # Check if we are still on the upload form (use specific selector)
-                    is_still_uploading = upload_frame.locator('button[data-e2e="post_video_button"]').is_visible() if upload_frame else False
-                    
-                    if not is_still_uploading and "upload" not in page.url:
-                        log("✅ URL changed from upload page. Assuming success.")
+            
+            # Try in upload_frame first
+            for sel in draft_locators:
+                try:
+                    d_btn = upload_frame.locator(sel).first
+                    if d_btn.count() > 0 and d_btn.is_visible():
+                        log(f"   Found Draft button (frame): {sel}")
+                        d_btn.scroll_into_view_if_needed()
+                        time.sleep(0.5)
+                        d_btn.click(force=True)
+                        time.sleep(3)
+                        draft_clicked = True
                         success = True
-                        msg = "Uploaded (Heuristic: URL Changed)"
-                    else:
-                        # LAST RESORT: Try clicking Post button one more time with all methods
-                        log("⚠️ Still on upload page. Final Post attempt...")
-                        take_screenshot(page, "final_attempt.png")
-                        
-                        final_success = False
-                        try:
-                            # Find the red Post button
-                            final_btn = page.locator('button[data-e2e="post_video_button"]').first
-                            if final_btn.count() > 0 and final_btn.is_visible():
-                                # Try coordinate click
-                                box = final_btn.bounding_box()
-                                if box:
-                                    log(f"   Final click at ({box['x'] + box['width']/2:.0f}, {box['y'] + box['height']/2:.0f})")
-                                    page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                    time.sleep(5)
-                                    
-                                    if SUCCESS_URL in page.url or "tiktokstudio/content" in page.url:
-                                        log("✅ Final click worked!")
-                                        final_success = True
-                                        success = True
-                                        msg = "Uploaded successfully (final attempt)"
-                        except Exception as fe:
-                            log(f"   Final attempt failed: {fe}")
-                        
-                        if not final_success:
-                            err_path = take_screenshot(page, "err_final_fail.png")
-                            log("❌ All Post attempts failed.", err_path)
-                            success = False
-                            msg = "Post button click failed"
+                        msg = "Saved as Draft"
+                        break
+                except:
+                    continue
+            
+            # Try on main page if not found in frame
+            if not draft_clicked:
+                for sel in draft_locators:
+                    try:
+                        d_btn = page.locator(sel).first
+                        if d_btn.count() > 0 and d_btn.is_visible():
+                            log(f"   Found Draft button (page): {sel}")
+                            d_btn.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            d_btn.click(force=True)
+                            time.sleep(3)
+                            draft_clicked = True
+                            success = True
+                            msg = "Saved as Draft"
+                            break
+                    except:
+                        continue
+            
+            if draft_clicked:
+                log("✅ Draft saved successfully!")
+            else:
+                err_path = take_screenshot(page, "err_no_draft_button.png")
+                log("❌ Draft button not found.", err_path)
+                success = False
+                msg = "Upload failed - Draft button not found"
             
             browser.close()
             return (success, msg)

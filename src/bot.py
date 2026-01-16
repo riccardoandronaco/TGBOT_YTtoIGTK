@@ -856,114 +856,126 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Errore generico: {e}")
 
-async def autopilot_task(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    # Robust chat_id retrieval
-    chat_id = job.chat_id
-    if not chat_id and job.data:
-        chat_id = job.data if isinstance(job.data, int) else None
-
-    if not chat_id:
-        logger.error("Autopilot Task: Missing chat_id!")
+async def draft_tiktok_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Pubblica in batch fino a 5 video su TikTok come Draft.
+    Cerca video non ancora pubblicati su TikTok e li carica uno alla volta.
+    """
+    if not is_authorized(update.effective_user.id):
         return
-
-    # Time Check (07:00 - 23:00 Rome Time)
-    try:
-        import pytz
-        rome_tz = pytz.timezone('Europe/Rome')
-        now = datetime.datetime.now(rome_tz)
-    except ImportError:
-        now = datetime.datetime.now()
-        
-    current_hour = now.hour
-    logger.info(f"Autopilot Run: Hour {current_hour}")
-
-    # If outside working hours (07:00 inclusive to 23:00 exclusive -> 07:00 to 22:59)
-    if current_hour < 7 or current_hour >= 23:
-        logger.info(f"Autopilot: Night hours ({current_hour}:00). Skipping.")
-        # Optional: Send a 'sleeping' message only if it's the very first time? 
-        # Or just log it. If user complains about 'no feedback', maybe we send a muted message?
-        # Let's send a debug message so user knows it's alive.
-        # await context.bot.send_message(chat_id, text=f"😴 Autopilot: Orario notturno ({current_hour}:00). Dormo...", disable_notification=True)
-        return
-
-    await context.bot.send_message(chat_id, text=f"🤖 **Autopilot (h{current_hour})**: Ricerca video...", parse_mode="Markdown")
+    
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("🎬 **TikTok Draft Batch**\nCerco video da caricare...")
     
     try:
         loop = asyncio.get_running_loop()
         
-        # 1. Fetch Video
-        # We look for a video that is missing ANYWHERE (platform_filter=None)
-        video_url = await loop.run_in_executor(
-            None, 
-            yt_handler.get_oldest_unprocessed_video, 
-            YOUTUBE_CHANNEL_URL, 
-            history_handler, 
-            None 
+        # Get all videos from YouTube channel
+        all_videos = await loop.run_in_executor(
+            None,
+            yt_handler.get_channel_videos,
+            YOUTUBE_CHANNEL_URL,
+            20  # Check last 20 videos
         )
-
-        if not video_url:
-            await context.bot.send_message(chat_id, text="🤖 Autopilot: Nessun nuovo video trovato. Riprovo tra 2 ore.")
+        
+        if not all_videos:
+            await update.message.reply_text("❌ Nessun video trovato sul canale.")
             return
-
-        # 2. Download
-        await context.bot.send_message(chat_id, text=f"🤖 Autopilot: Scarico {video_url}...")
-        video_path, video_info = await loop.run_in_executor(None, yt_handler.download_video, video_url)
         
-        if not video_path:
-             await context.bot.send_message(chat_id, text=f"🤖 Autopilot: Errore download.")
-             return
-
-        video_id = video_info['id']
-        title = video_info['title']
-        # Simplified caption for auto-upload
-        caption = f"{title}\n\n#short #video" 
+        # Filter: only videos NOT in tiktok history
+        pending_videos = []
+        for video in all_videos:
+            video_id = video.get('id')
+            if video_id and not history_handler.exists(video_id, "tiktok"):
+                pending_videos.append(video)
         
-        # 3. Check what is needed
-        needs_ig = not history_handler.exists(video_id, "instagram")
-        needs_tt = not history_handler.exists(video_id, "tiktok")
+        if not pending_videos:
+            await update.message.reply_text("✅ Tutti i video sono già stati caricati su TikTok!")
+            return
         
-        results = []
+        # Take only first 5
+        batch = pending_videos[:5]
+        await update.message.reply_text(f"📦 Trovati {len(pending_videos)} video da caricare.\nCarico i primi {len(batch)}...")
         
-        # 4. Instagram Upload
-        if needs_ig:
-            try:
-                await context.bot.send_message(chat_id, text="🤖 Autopilot: Caricamento su Instagram...")
-                await loop.run_in_executor(None, ig_handler.upload_video, video_path, caption)
-                history_handler.add_entry(video_id, "instagram")
-                results.append("Instagram: ✅")
-            except Exception as e:
-                logger.error(f"Autopilot IG Error: {e}")
-                results.append(f"Instagram: ❌ ({e})")
-        else:
-            results.append("Instagram: ⏭️ (Già fatto)")
-
-        # 5. TikTok Upload 
-        if needs_tt:
-            try:
-                 await context.bot.send_message(chat_id, text="🤖 Autopilot: Caricamento su TikTok...")
-                 await loop.run_in_executor(None, tiktok_handler.upload_video, video_path, caption)
-                 history_handler.add_entry(video_id, "tiktok")
-                 results.append("TikTok: ✅")
-            except Exception as e:
-                logger.error(f"Autopilot TikTok Error: {e}")
-                results.append(f"TikTok: ❌ ({e})")
-        else:
-             results.append("TikTok: ⏭️ (Già fatto)")
-             
-        # Cleanup
-        if os.path.exists(video_path):
-            try:
-                os.remove(video_path)
-            except:
-                pass
+        success_count = 0
+        fail_count = 0
+        
+        for i, video in enumerate(batch, 1):
+            video_url = video.get('url') or f"https://www.youtube.com/watch?v={video.get('id')}"
+            video_id = video.get('id')
+            title = video.get('title', 'Unknown')
             
-        final_msg = f"🤖 **Autopilot Report**\nVideo: {title}\n\n" + "\n".join(results)
-        await context.bot.send_message(chat_id, text=final_msg, parse_mode="Markdown")
+            await context.bot.send_message(chat_id, f"📥 [{i}/{len(batch)}] Scarico: {title[:50]}...")
+            
+            try:
+                # Download
+                video_path, video_info = await loop.run_in_executor(None, yt_handler.download_video, video_url)
+                
+                if not video_path:
+                    await context.bot.send_message(chat_id, f"❌ Download fallito per: {title[:30]}")
+                    fail_count += 1
+                    continue
+                
+                # Caption
+                caption = truncate_caption(f"{title} #shorts")
+                
+                # Status callback
+                def status_cb(msg, screenshot=None):
+                    asyncio.run_coroutine_threadsafe(
+                        context.bot.send_message(chat_id, f"   📝 {msg}"),
+                        loop
+                    )
+                
+                # Upload to TikTok
+                await context.bot.send_message(chat_id, f"📤 [{i}/{len(batch)}] Carico su TikTok Draft...")
+                
+                result = await loop.run_in_executor(
+                    None,
+                    tiktok_handler.upload_video,
+                    video_path,
+                    caption,
+                    status_cb
+                )
+                
+                if isinstance(result, tuple):
+                    success, msg = result
+                else:
+                    success = result
+                    msg = "Unknown"
+                
+                if success:
+                    history_handler.add(video_id, "tiktok")
+                    await context.bot.send_message(chat_id, f"✅ [{i}/{len(batch)}] Salvato come Draft: {title[:30]}...")
+                    success_count += 1
+                else:
+                    await context.bot.send_message(chat_id, f"❌ [{i}/{len(batch)}] Errore: {msg}")
+                    fail_count += 1
+                
+                # Cleanup
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+                
+                # Small pause between uploads
+                if i < len(batch):
+                    await asyncio.sleep(5)
+                    
+            except Exception as e:
+                logger.error(f"Draft batch error for {video_id}: {e}")
+                await context.bot.send_message(chat_id, f"❌ [{i}/{len(batch)}] Eccezione: {e}")
+                fail_count += 1
+        
+        # Final report
+        await context.bot.send_message(
+            chat_id,
+            f"🏁 **Draft Batch Completato**\n\n"
+            f"✅ Successi: {success_count}\n"
+            f"❌ Falliti: {fail_count}\n"
+            f"📋 Rimanenti: {len(pending_videos) - len(batch)}"
+        )
         
     except Exception as e:
-        logger.error(f"Autopilot Critical Error: {e}")
-        await context.bot.send_message(chat_id, text=f"🤖 Autopilot Error: {e}")
+        logger.error(f"Draft batch critical error: {e}")
+        await update.message.reply_text(f"❌ Errore critico: {e}")
 
 async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
@@ -1000,119 +1012,17 @@ async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error clearing cache: {e}")
         await update.message.reply_text(f"Errore pulizia cache: {e}")
 
-async def autopilot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-    
-    chat_id = update.effective_chat.id
-    
-    # Remove existing jobs
-    current_jobs = context.job_queue.get_jobs_by_name(f'autopilot_{chat_id}')
-    for job in current_jobs:
-        job.schedule_removal()
-    
-    # Run every 2 hours (7200 seconds). First run in 10 seconds.
-    context.job_queue.run_repeating(autopilot_task, interval=7200, first=10, chat_id=chat_id, name=f'autopilot_{chat_id}')
-    
-    await update.message.reply_text("🤖 **Pilota Automatico ATTIVATO**\n\nCercherò un video ogni 2 ore e lo caricherò su Instagram e TikTok.\nUsa /autostop per fermarmi.")
-
-async def autopilot_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-
-    chat_id = update.effective_chat.id
-    current_jobs = context.job_queue.get_jobs_by_name(f'autopilot_{chat_id}')
-    
-    if not current_jobs:
-        await update.message.reply_text("🤖 Il Pilota Automatico non è attivo.")
-        return
-
-    for job in current_jobs:
-        job.schedule_removal()
-    
-    await update.message.reply_text("🛑 **Pilota Automatico DISATTIVATO**")
-
-async def test_tiktok_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-    
-    chat_id = update.effective_chat.id
-    await context.bot.send_message(chat_id, "🎬 **Test TikTok Flow**\nGenerazione video dummy (5s)...")
-    
-    dummy_path = os.path.join(DOWNLOAD_PATH, "test_dummy.mp4")
-    
-    # 1. Generate Dummy Video with ffmpeg
-    try:
-        # Create a simple red video with silence
-        # Using -y to overwrite
-        cmd = [
-            'ffmpeg', '-y', 
-            '-f', 'lavfi', '-i', 'color=c=red:s=720x1280:d=5',  # Vertical 9:16 RED
-            '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
-            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '5',
-            '-c:a', 'aac',
-            dummy_path
-        ]
-        # Run sync, but it's fast enough. Or use loop.run_in_executor if needed.
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception as e:
-        await context.bot.send_message(chat_id, f"❌ Errore ffmpeg: {e}\nAssicurati che ffmpeg sia installato.")
-        return
-
-    await context.bot.send_message(chat_id, "🚀 Avvio Upload Simulato (Real Browser)...")
-
-    # 2. Define Status Callback to echo to chat
-    loop = asyncio.get_running_loop()
-    
-    def status_callback(msg, screenshot=None):
-        # Fire and forget status update to Telegram
-        logger.info(f"CALLBACK: {msg}")
-        asyncio.run_coroutine_threadsafe(
-            context.bot.send_message(chat_id, f"ℹ️ {msg}"),
-            loop
-        )
-        if screenshot and os.path.exists(screenshot):
-             asyncio.run_coroutine_threadsafe(
-                context.bot.send_photo(chat_id, photo=open(screenshot, 'rb'), caption=f"📸 {msg}"),
-                loop
-             )
-
-    # 3. Run Upload
-    try:
-        # success, msg = tiktok_handler.upload_video(dummy_path, "Test Upload #bot_test", status_callback)
-        success, msg = await loop.run_in_executor(
-            None, 
-            tiktok_handler.upload_video, 
-            dummy_path, 
-            "Test Upload #bot_test", 
-            status_callback
-        )
-        
-        if success:
-            await context.bot.send_message(chat_id, f"✅ **TEST COMPLETATO**\nVideo caricato correttamente.\nMsg: {msg}")
-        else:
-            await context.bot.send_message(chat_id, f"❌ **TEST FALLITO**\nErrore: {msg}")
-            
-    except Exception as e:
-        await context.bot.send_message(chat_id, f"❌ Eccezione durante il test: {e}")
-    
-    # Cleanup
-    if os.path.exists(dummy_path):
-        os.remove(dummy_path)
-
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
         BotCommand("fetch", "Cerca nuovo short (Menu)"),
-        BotCommand("autostart", "Avvia Pilota Automatico (2h)"),
-        BotCommand("autostop", "Ferma Pilota Automatico"),
+        BotCommand("drafttiktok", "Carica 5 video su TikTok Draft"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
         BotCommand("clearcache", "Svuota cartella download"),
         BotCommand("check", "Test Connettività/Ban"),
         BotCommand("update", "Aggiorna bot e Riavvia"),
         BotCommand("reboot", "Riavvia Raspberry Pi"),
-        BotCommand("testtiktok", "Test rapido upload TikTok")
     ])
 
 if __name__ == '__main__':
@@ -1125,9 +1035,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('fetch', fetch_command))
     application.add_handler(CommandHandler('clearcache', clear_cache))
-    application.add_handler(CommandHandler('autostart', autopilot_start))
-    application.add_handler(CommandHandler('autostop', autopilot_stop))
-    application.add_handler(CommandHandler('testtiktok', test_tiktok_flow))
+    application.add_handler(CommandHandler('drafttiktok', draft_tiktok_batch))
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))

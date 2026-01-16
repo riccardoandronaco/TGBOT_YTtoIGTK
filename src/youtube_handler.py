@@ -102,6 +102,58 @@ class YouTubeHandler:
             logger.error(f"Error fetching YouTube subs: {e}")
             return "Errore"
 
+    def get_channel_videos(self, channel_url, limit=None):
+        """
+        Fetches the list of all videos from the channel.
+        Returns a list of dicts with 'id', 'url', 'title' for each video.
+        Videos are returned in chronological order (oldest first).
+        
+        limit: Maximum number of videos to return (None = all)
+        """
+        ydl_opts = {
+            'extract_flat': True,
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': True,
+            'playlistend': None,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Fetching channel videos for {channel_url}...")
+                result = ydl.extract_info(channel_url, download=False)
+                
+                if 'entries' not in result:
+                    logger.warning("No entries found in channel.")
+                    return []
+
+                entries = list(result['entries'])
+                entries = [e for e in entries if e]
+                
+                # Reverse to get oldest first
+                entries.reverse()
+                
+                videos = []
+                for entry in entries:
+                    video_id = entry.get('id')
+                    title = entry.get('title')
+                    if video_id:
+                        videos.append({
+                            'id': video_id,
+                            'url': f"https://www.youtube.com/watch?v={video_id}",
+                            'title': title or 'Untitled'
+                        })
+                
+                logger.info(f"Found {len(videos)} videos in channel.")
+                
+                if limit:
+                    return videos[:limit]
+                return videos
+
+        except Exception as e:
+            logger.error(f"Error fetching channel videos: {e}")
+            raise e
+
     def get_oldest_unprocessed_video(self, channel_url, history_handler, platform_filter=None):
         """
         Fetches the list of videos from the channel, sorts them by date (oldest first),
