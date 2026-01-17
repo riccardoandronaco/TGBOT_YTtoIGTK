@@ -196,26 +196,54 @@ async def recap_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         
         # 1. YouTube Stats
-        yt_subs = await loop.run_in_executor(None, yt_handler.get_subscriber_count, YOUTUBE_CHANNEL_URL)
+        yt_subs = "N/A"
+        try:
+            yt_subs = await loop.run_in_executor(None, yt_handler.get_subscriber_count, YOUTUBE_CHANNEL_URL)
+        except Exception as e:
+            logger.error(f"YouTube stats error: {e}")
+            yt_subs = f"Errore"
         
-        # 2. Instagram Stats (using cached session or public fetch)
-        ig_stats = await loop.run_in_executor(None, ig_handler.get_stats)
-        ig_followers = ig_stats.get('followers', "N/A")
-        ig_media_count = ig_stats.get('media_count', "N/A")
+        # 2. Instagram Stats
+        ig_followers = "N/A"
+        ig_media_count = "N/A"
+        try:
+            ig_stats = await loop.run_in_executor(None, ig_handler.get_stats)
+            ig_followers = ig_stats.get('followers', "N/A")
+            ig_media_count = ig_stats.get('media_count', "N/A")
+        except Exception as e:
+            logger.error(f"Instagram stats error: {e}")
+            ig_followers = "Errore"
+            ig_media_count = "Errore"
         
         # 3. TikTok Stats
-        tt_stats = await loop.run_in_executor(None, tiktok_handler.get_stats, TIKTOK_USERNAME)
-        tt_followers = tt_stats.get('followers', "N/A")
-        tt_likes = tt_stats.get('likes', "N/A")
-        tt_video_count = tt_stats.get('video_count', "N/A")
+        tt_followers = "N/A"
+        tt_likes = "N/A"
+        tt_video_count = "N/A"
+        try:
+            tt_stats = await loop.run_in_executor(None, tiktok_handler.get_stats, TIKTOK_USERNAME)
+            tt_followers = tt_stats.get('followers', "N/A")
+            tt_likes = tt_stats.get('likes', "N/A")
+            tt_video_count = tt_stats.get('video_count', "N/A")
+        except Exception as e:
+            logger.error(f"TikTok stats error: {e}")
+            tt_followers = "Errore"
+
+        # 4. History Stats
+        ig_published = len(history_handler.data.get("instagram", []))
+        tt_published = len(history_handler.data.get("tiktok", []))
+        skipped = len(history_handler.data.get("skipped", []))
 
         msg = (
-            f"📈 **STATISTICHE SOCIAL**\n\n"
-            f"🟥 **YouTube**: {yt_subs} Iscritti\n"
-            f"🟪 **Instagram**: {ig_followers} Follower | {ig_media_count} Post\n"
-            f"⬛ **TikTok**: {tt_followers} Follower | {tt_likes} Likes | {tt_video_count} Video"
+            f"📈 STATISTICHE SOCIAL\n\n"
+            f"🟥 YouTube: {yt_subs} Iscritti\n"
+            f"🟪 Instagram: {ig_followers} Follower | {ig_media_count} Post\n"
+            f"⬛ TikTok: {tt_followers} Follower | {tt_likes} Likes | {tt_video_count} Video\n\n"
+            f"📂 STORICO BOT\n"
+            f"📸 Instagram: {ig_published} video pubblicati\n"
+            f"🎵 TikTok: {tt_published} video pubblicati\n"
+            f"⏭️ Skippati: {skipped}"
         )
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg)
 
     except Exception as e:
         logger.error(f"Error in recap: {e}")
@@ -376,6 +404,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data.startswith('draft_count_'):
         count = int(query.data.split('_')[2])
         await execute_draft_batch(update, context, count)
+        return
+
+    # --- Instagram Batch Count Selection ---
+    if query.data.startswith('ig_batch_'):
+        count = int(query.data.split('_')[2])
+        await execute_ig_batch(update, context, count)
         return
 
     # --- History Management ---
@@ -1025,6 +1059,141 @@ async def execute_draft_batch(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.send_message(chat_id, f"❌ Errore critico: {e}")
 
 
+async def batch_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Mostra menu per selezionare quanti video pubblicare su Instagram.
+    """
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("1️⃣", callback_data='ig_batch_1'),
+            InlineKeyboardButton("2️⃣", callback_data='ig_batch_2'),
+            InlineKeyboardButton("3️⃣", callback_data='ig_batch_3'),
+            InlineKeyboardButton("5️⃣", callback_data='ig_batch_5'),
+        ]
+    ]
+    await update.message.reply_text(
+        "📸 **Instagram Batch Publish**\n\nQuanti video vuoi pubblicare?\n⏰ Attesa: 10 minuti tra ogni post",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+
+async def execute_ig_batch(update: Update, context: ContextTypes.DEFAULT_TYPE, max_uploads: int):
+    """
+    Esegue il batch publish di video su Instagram.
+    Attende 10 minuti tra un video e l'altro.
+    """
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    
+    wait_minutes = 10
+    await query.edit_message_text(f"📸 Instagram Batch Publish\nCarico {max_uploads} video (attesa {wait_minutes} min tra post)...")
+    
+    try:
+        loop = asyncio.get_running_loop()
+        
+        # Login to Instagram once at the start
+        await context.bot.send_message(chat_id, "🔐 Login Instagram...")
+        await loop.run_in_executor(None, ig_handler.login)
+        
+        success_ids = []
+        fail_ids = []
+        
+        for i in range(1, max_uploads + 1):
+            # Find oldest unprocessed video for Instagram
+            video_url = await loop.run_in_executor(
+                None,
+                yt_handler.get_oldest_unprocessed_video,
+                YOUTUBE_CHANNEL_URL,
+                history_handler,
+                "instagram"
+            )
+            
+            if not video_url:
+                await context.bot.send_message(chat_id, "✅ Nessun altro video da caricare!")
+                break
+            
+            # Send YouTube link message
+            await context.bot.send_message(
+                chat_id, 
+                f"📸 [{i}/{max_uploads}] {video_url}",
+                disable_web_page_preview=False
+            )
+            
+            # Create status message that will be updated
+            status_msg = await context.bot.send_message(chat_id, "⏳ Inizializzazione...")
+            
+            video_id = None
+            try:
+                # Download video
+                await status_msg.edit_text("📥 Download in corso...")
+                
+                video_info = await loop.run_in_executor(None, yt_handler.download_video, video_url)
+                
+                video_path = video_info.get('path')
+                video_id = video_info.get('id')
+                title = video_info.get('title', 'Unknown')
+                
+                if not video_path or not os.path.exists(video_path):
+                    await status_msg.edit_text("❌ Download fallito!")
+                    if video_id:
+                        fail_ids.append(video_id)
+                    continue
+                
+                await status_msg.edit_text(f"📦 Scaricato: {title[:50]}...")
+                
+                # Caption
+                caption = f"{title} #shorts"
+                
+                # Upload to Instagram
+                await status_msg.edit_text("📤 Caricamento su Instagram...")
+                
+                await loop.run_in_executor(None, ig_handler.upload_video, video_path, caption)
+                
+                history_handler.add(video_id, "instagram")
+                await status_msg.edit_text(f"✅ Pubblicato su Instagram!\n{video_id}")
+                success_ids.append(video_id)
+                
+                # Wait 10 minutes before next upload (except for last one)
+                if i < max_uploads:
+                    await status_msg.edit_text(f"✅ Pubblicato!\n⏰ Attendo {wait_minutes} minuti...")
+                    
+                    # Countdown timer
+                    for remaining in range(wait_minutes, 0, -1):
+                        await asyncio.sleep(60)  # 1 minute
+                        try:
+                            await status_msg.edit_text(f"✅ Pubblicato!\n⏰ Prossimo video tra {remaining-1} minuti...")
+                        except:
+                            pass
+                    
+            except Exception as e:
+                logger.error(f"IG batch error for video: {e}")
+                await status_msg.edit_text(f"❌ Eccezione: {e}")
+                if video_id:
+                    fail_ids.append(video_id)
+        
+        # Final report
+        report = "🏁 Instagram Batch Completato\n\n"
+        report += f"✅ Successi: {len(success_ids)}\n"
+        if success_ids:
+            for vid in success_ids:
+                report += f"   • {vid}\n"
+        
+        report += f"\n❌ Falliti: {len(fail_ids)}\n"
+        if fail_ids:
+            for vid in fail_ids:
+                report += f"   • {vid}\n"
+        
+        await context.bot.send_message(chat_id, report)
+        
+    except Exception as e:
+        logger.error(f"IG batch critical error: {e}")
+        await context.bot.send_message(chat_id, f"❌ Errore critico: {e}")
+
+
 async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -1064,7 +1233,8 @@ async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Avvia il bot"),
         BotCommand("fetch", "Cerca nuovo short (Menu)"),
-        BotCommand("drafttiktok", "Carica 5 video su TikTok Draft"),
+        BotCommand("drafttiktok", "Batch TikTok Draft"),
+        BotCommand("batchig", "Batch Instagram Publish"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
         BotCommand("clearcache", "Svuota cartella download"),
@@ -1084,6 +1254,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('fetch', fetch_command))
     application.add_handler(CommandHandler('clearcache', clear_cache))
     application.add_handler(CommandHandler('drafttiktok', draft_tiktok_batch))
+    application.add_handler(CommandHandler('batchig', batch_instagram))
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))
