@@ -49,16 +49,22 @@ class InstagramHandler:
         Returns a dict with followers and media count.
         """
         try:
-            # Try loading session if available to avoid being completely anonymous (rate limits)
+            # Try loading session and login
             if os.path.exists(self.session_file):
                 try:
                     self.cl.load_settings(self.session_file)
                 except Exception as e:
                     logger.debug(f"Failed to load settings for stats: {e}")
             
-            # user_info_by_username is often more reliable for public stats than user_info(id)
-            # if we don't have the ID handy.
-            info = self.cl.user_info_by_username(self.username)
+            # Login to ensure we're authenticated
+            try:
+                self.cl.login(self.username, self.password)
+            except Exception as e:
+                logger.debug(f"Login for stats failed (may already be logged in): {e}")
+            
+            # Get user info for the authenticated user
+            user_id = self.cl.user_id
+            info = self.cl.user_info(user_id)
             return {
                 'followers': info.follower_count,
                 'media_count': info.media_count

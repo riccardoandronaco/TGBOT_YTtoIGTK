@@ -406,10 +406,33 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await execute_draft_batch(update, context, count)
         return
 
-    # --- Instagram Batch Count Selection ---
-    if query.data.startswith('ig_batch_'):
+    # --- Instagram Batch Count Selection (Step 1: count) ---
+    if query.data.startswith('ig_count_'):
         count = int(query.data.split('_')[2])
-        await execute_ig_batch(update, context, count)
+        # Store count and ask for time
+        context.user_data['ig_batch_count'] = count
+        keyboard = [
+            [
+                InlineKeyboardButton("30 min", callback_data='ig_time_30'),
+                InlineKeyboardButton("1 ora", callback_data='ig_time_60'),
+            ],
+            [
+                InlineKeyboardButton("2 ore", callback_data='ig_time_120'),
+                InlineKeyboardButton("4 ore", callback_data='ig_time_240'),
+            ]
+        ]
+        await query.edit_message_text(
+            f"📸 **Instagram Batch Publish**\n\n✅ Video da pubblicare: {count}\n\n⏰ Quanto tempo tra ogni post?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return
+    
+    # --- Instagram Batch Time Selection (Step 2: time) ---
+    if query.data.startswith('ig_time_'):
+        wait_minutes = int(query.data.split('_')[2])
+        count = context.user_data.get('ig_batch_count', 1)
+        await execute_ig_batch(update, context, count, wait_minutes)
         return
 
     # --- History Management ---
@@ -1068,29 +1091,34 @@ async def batch_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [
-            InlineKeyboardButton("1️⃣", callback_data='ig_batch_1'),
-            InlineKeyboardButton("2️⃣", callback_data='ig_batch_2'),
-            InlineKeyboardButton("3️⃣", callback_data='ig_batch_3'),
-            InlineKeyboardButton("5️⃣", callback_data='ig_batch_5'),
+            InlineKeyboardButton("1️⃣", callback_data='ig_count_1'),
+            InlineKeyboardButton("2️⃣", callback_data='ig_count_2'),
+            InlineKeyboardButton("3️⃣", callback_data='ig_count_3'),
+            InlineKeyboardButton("5️⃣", callback_data='ig_count_5'),
         ]
     ]
     await update.message.reply_text(
-        "📸 **Instagram Batch Publish**\n\nQuanti video vuoi pubblicare?\n⏰ Attesa: 10 minuti tra ogni post",
+        "📸 **Instagram Batch Publish**\n\nQuanti video vuoi pubblicare?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
 
-async def execute_ig_batch(update: Update, context: ContextTypes.DEFAULT_TYPE, max_uploads: int):
+async def execute_ig_batch(update: Update, context: ContextTypes.DEFAULT_TYPE, max_uploads: int, wait_minutes: int = 60):
     """
     Esegue il batch publish di video su Instagram.
-    Attende 10 minuti tra un video e l'altro.
+    Attende wait_minutes minuti tra un video e l'altro.
     """
     query = update.callback_query
     chat_id = update.effective_chat.id
     
-    wait_minutes = 10
-    await query.edit_message_text(f"📸 Instagram Batch Publish\nCarico {max_uploads} video (attesa {wait_minutes} min tra post)...")
+    # Format wait time for display
+    if wait_minutes >= 60:
+        wait_display = f"{wait_minutes // 60} ore" if wait_minutes > 60 else "1 ora"
+    else:
+        wait_display = f"{wait_minutes} min"
+    
+    await query.edit_message_text(f"📸 Instagram Batch Publish\nCarico {max_uploads} video (attesa {wait_display} tra post)...")
     
     try:
         loop = asyncio.get_running_loop()
