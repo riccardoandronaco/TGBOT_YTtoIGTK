@@ -1,7 +1,7 @@
 import os
 import logging
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired
+from instagrapi.exceptions import LoginRequired, ClientError
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,27 @@ class InstagramHandler:
         self.cl = Client()
         # Aumentiamo il timeout per connessioni lente o RPi
         self.cl.request_timeout = 120  # 2 minuti di timeout
+
+    def fresh_login(self):
+        """
+        Forza un login pulito cancellando la sessione esistente.
+        """
+        logger.info("Performing fresh login (deleting old session)...")
+        
+        # Delete old session
+        if os.path.exists(self.session_file):
+            try:
+                os.remove(self.session_file)
+                logger.info(f"Deleted old session file: {self.session_file}")
+            except Exception as e:
+                logger.warning(f"Could not delete session file: {e}")
+        
+        # Create new client and login
+        self.cl = Client()
+        self.cl.request_timeout = 120
+        self.cl.login(self.username, self.password)
+        self.cl.dump_settings(self.session_file)
+        logger.info("Fresh login completed and session saved.")
 
     def login(self):
         """
@@ -76,19 +97,49 @@ class InstagramHandler:
     def upload_video(self, video_path, caption):
         """
         Uploads a video to Instagram (as a Reel/Clip).
+        Retries with fresh login on 403 errors.
         """
-        try:
-            logger.info(f"Uploading video: {video_path}")
-            # upload_clip is for Reels
-            media = self.cl.clip_upload(
-                video_path,
-                caption=caption
-            )
-            logger.info(f"Uploaded successfully. Media PK: {media.pk}")
-            return media.pk
-        except ValidationError as e:
-            logger.warning(f"Pydantic validation error ignored (upload likely succeeded): {e}")
-            return "unknown_pk_validation_error"
-        except Exception as e:
-            logger.error(f"Error uploading video: {e}")
-            raise e
+        for attempt in range(2):  # Try twice
+            try:
+                logger.info(f"Uploading video: {video_path} (attempt {attempt + 1})")
+                # upload_clip is for Reels
+                media = self.cl.clip_upload(
+                    video_path,
+                    caption=caption
+                )
+                logger.info(f"Uploaded successfully. Media PK: {media.pk}")
+                return media.pk
+            except ValidationError as e:
+                logger.warning(f"Pydantic validation error ignored (upload likely succeeded): {e}")
+                return "unknown_pk_validation_error"
+            except (LoginRequired, ClientError) as e:
+                error_str = str(e)
+                logger.warning(f"Auth/Client error on attempt {attempt + 1}: {e}")
+                if attempt == 0:  # First attempt failed
+                    logger.info("Trying fresh login and retry...")
+                    try:
+                        self.fresh_login()
+                    except Exception as login_err:
+                        logger.error(f"Fresh login failed: {login_err}")
+                        raise e
+                else:
+                    raise e
+            except Exception as e:
+                error_str = str(e)
+                # Check for 403 in error message
+                if '403' in error_str or 'Unknown' in error_str:
+                    logger.warning(f"Possible 403/session error on attempt {attempt + 1}: {e}")
+                    if attempt == 0:
+                        logger.info("Trying fresh login and retry...")
+                        try:
+                            self.fresh_login()
+                        except Exception as login_err:
+                            logger.error(f"Fresh login failed: {login_err}")
+                            raise e
+                    else:
+                        raise e
+                else:
+                    logger.error(f"Error uploading video: {e}")
+                    raise e
+        
+        raise Exception("Upload failed after all retries")

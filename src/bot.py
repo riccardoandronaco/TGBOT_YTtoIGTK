@@ -896,6 +896,23 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await msg.edit_text(f"❌ Errore Critico Diagnostica: {e}")
 
+
+async def reset_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Forza un reset della sessione Instagram (risolve errori 403)."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+    
+    msg = await update.message.reply_text("🔄 Reset sessione Instagram in corso...")
+    
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, ig_handler.fresh_login)
+        await msg.edit_text("✅ Sessione Instagram resettata con successo!\nOra puoi riprovare a pubblicare.")
+    except Exception as e:
+        logger.error(f"Reset IG failed: {e}")
+        await msg.edit_text(f"❌ Errore reset Instagram: {e}")
+
+
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Updates the bot via git pull and reboots."""
     user_id = update.effective_user.id
@@ -1263,6 +1280,7 @@ async def post_init(application: Application):
         BotCommand("fetch", "Cerca nuovo short (Menu)"),
         BotCommand("drafttiktok", "Batch TikTok Draft"),
         BotCommand("batchig", "Batch Instagram Publish"),
+        BotCommand("resetig", "Reset sessione Instagram"),
         BotCommand("history", "Gestisci storico video"),
         BotCommand("recap", "Visualizza statistiche"),
         BotCommand("clearcache", "Svuota cartella download"),
@@ -1286,6 +1304,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('history', history_command))
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))
+    application.add_handler(CommandHandler('resetig', reset_instagram))
     application.add_handler(CommandHandler('update', update_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
