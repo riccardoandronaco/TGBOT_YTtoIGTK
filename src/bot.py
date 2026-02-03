@@ -902,15 +902,40 @@ async def reset_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_authorized(user_id): return
     
-    msg = await update.message.reply_text("🔄 Reset sessione Instagram in corso...")
+    msg = await update.message.reply_text("🔄 Reset sessione Instagram in corso...\n⚠️ Se richiede verifica, riceverai un codice via email/SMS.\nUsa /verifyig <codice> per completare.")
     
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, ig_handler.fresh_login)
         await msg.edit_text("✅ Sessione Instagram resettata con successo!\nOra puoi riprovare a pubblicare.")
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Reset IG failed: {e}")
-        await msg.edit_text(f"❌ Errore reset Instagram: {e}")
+        if "CHALLENGE_REQUIRED" in error_str:
+            await msg.edit_text("⚠️ Instagram richiede verifica!\n\n1. Controlla email/SMS per il codice\n2. Usa /verifyig <codice> per completare\n\nEsempio: `/verifyig 123456`", parse_mode='Markdown')
+        else:
+            await msg.edit_text(f"❌ Errore reset Instagram: {e}")
+
+
+async def verify_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inserisce il codice di verifica per Instagram."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+    
+    if not context.args or len(context.args) == 0:
+        await update.message.reply_text("⚠️ Uso: /verifyig <codice>\n\nEsempio: `/verifyig 123456`", parse_mode='Markdown')
+        return
+    
+    code = context.args[0].strip()
+    
+    # Import the function to set verification code
+    from instagram_handler import set_verification_code
+    
+    await update.message.reply_text(f"📧 Invio codice di verifica: {code}...")
+    
+    set_verification_code(code)
+    
+    await update.message.reply_text("✅ Codice inviato! Se il login era in attesa, dovrebbe completarsi.\nRiprova /resetig o /batchig.")
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1305,6 +1330,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('reboot', reboot_command))
     application.add_handler(CommandHandler('check', check_command))
     application.add_handler(CommandHandler('resetig', reset_instagram))
+    application.add_handler(CommandHandler('verifyig', verify_instagram))
     application.add_handler(CommandHandler('update', update_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))

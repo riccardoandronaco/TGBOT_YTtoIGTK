@@ -1,10 +1,48 @@
 import os
 import logging
+import threading
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired, ClientError
+from instagrapi.exceptions import LoginRequired, ClientError, ChallengeRequired
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
+
+# Global variable to store verification code from Telegram
+_verification_code = None
+_verification_event = threading.Event()
+
+
+def set_verification_code(code: str):
+    """Called from bot to set the verification code."""
+    global _verification_code
+    _verification_code = code
+    _verification_event.set()
+
+
+def get_verification_code(username, choice) -> str:
+    """
+    Challenge handler that waits for verification code from Telegram.
+    choice: 0 = SMS, 1 = Email
+    """
+    global _verification_code, _verification_event
+    
+    _verification_code = None
+    _verification_event.clear()
+    
+    method = "SMS" if choice == 0 else "Email"
+    logger.info(f"Challenge required! Instagram will send code via {method}. Waiting for /verifyig command...")
+    
+    # Wait up to 5 minutes for code
+    if _verification_event.wait(timeout=300):
+        code = _verification_code
+        _verification_code = None
+        _verification_event.clear()
+        logger.info(f"Received verification code: {code}")
+        return code
+    else:
+        logger.error("Timeout waiting for verification code")
+        raise Exception("Timeout: nessun codice inserito entro 5 minuti. Usa /verifyig <codice>")
+
 
 class InstagramHandler:
     def __init__(self, username, password, session_file='session.json'):
@@ -12,8 +50,17 @@ class InstagramHandler:
         self.password = password
         self.session_file = session_file
         self.cl = Client()
-        # Aumentiamo il timeout per connessioni lente o RPi
-        self.cl.request_timeout = 120  # 2 minuti di timeout
+        self.cl.request_timeout = 120
+        self._pending_challenge = False
+        self._setup_challenge_handler()
+    
+    def _setup_challenge_handler(self):
+        """Setup the challenge handler for 2FA/verification."""
+        self.cl.challenge_code_handler = get_verification_code
+    
+    def is_pending_challenge(self):
+        """Check if there's a pending challenge waiting for code."""
+        return self._pending_challenge
 
     def fresh_login(self):
         """
@@ -32,9 +79,23 @@ class InstagramHandler:
         # Create new client and login
         self.cl = Client()
         self.cl.request_timeout = 120
-        self.cl.login(self.username, self.password)
-        self.cl.dump_settings(self.session_file)
-        logger.info("Fresh login completed and session saved.")
+        self._setup_challenge_handler()
+        
+        try:
+            self.cl.login(self.username, self.password)
+            self.cl.dump_settings(self.session_file)
+            logger.info("Fresh login completed and session saved.")
+            self._pending_challenge = False
+        except ChallengeRequired as e:
+            logger.warning(f"Challenge required during fresh login: {e}")
+            self._pending_challenge = True
+            raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
+        except Exception as e:
+            error_str = str(e).lower()
+            if 'challenge' in error_str or 'checkpoint' in error_str:
+                self._pending_challenge = True
+                raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
+            raise e
 
     def login(self):
         """
@@ -50,15 +111,32 @@ class InstagramHandler:
         try:
             self.cl.login(self.username, self.password)
             logger.info("Logged in successfully.")
+            self._pending_challenge = False
+        except ChallengeRequired as e:
+            logger.warning(f"Challenge required: {e}")
+            self._pending_challenge = True
+            raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
         except Exception as e:
+            error_str = str(e).lower()
+            if 'challenge' in error_str or 'checkpoint' in error_str:
+                self._pending_challenge = True
+                raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
+            
             logger.error(f"Login failed: {e}")
-            # Try to relogin without session if it failed? 
-            # Usually instagrapi handles this, but let's be safe.
             try:
                 logger.info("Attempting fresh login...")
                 self.cl = Client()
+                self._setup_challenge_handler()
                 self.cl.login(self.username, self.password)
+                self._pending_challenge = False
+            except ChallengeRequired as e2:
+                self._pending_challenge = True
+                raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
             except Exception as e2:
+                error_str2 = str(e2).lower()
+                if 'challenge' in error_str2 or 'checkpoint' in error_str2:
+                    self._pending_challenge = True
+                    raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
                 logger.error(f"Fresh login failed: {e2}")
                 raise e2
 
@@ -112,8 +190,14 @@ class InstagramHandler:
             except ValidationError as e:
                 logger.warning(f"Pydantic validation error ignored (upload likely succeeded): {e}")
                 return "unknown_pk_validation_error"
+            except ChallengeRequired as e:
+                self._pending_challenge = True
+                raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
             except (LoginRequired, ClientError) as e:
-                error_str = str(e)
+                error_str = str(e).lower()
+                if 'challenge' in error_str or 'checkpoint' in error_str:
+                    self._pending_challenge = True
+                    raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
                 logger.warning(f"Auth/Client error on attempt {attempt + 1}: {e}")
                 if attempt == 0:  # First attempt failed
                     logger.info("Trying fresh login and retry...")
@@ -121,13 +205,17 @@ class InstagramHandler:
                         self.fresh_login()
                     except Exception as login_err:
                         logger.error(f"Fresh login failed: {login_err}")
-                        raise e
+                        raise login_err
                 else:
                     raise e
             except Exception as e:
-                error_str = str(e)
+                error_str = str(e).lower()
+                # Check for challenge/checkpoint
+                if 'challenge' in error_str or 'checkpoint' in error_str:
+                    self._pending_challenge = True
+                    raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
                 # Check for 403 in error message
-                if '403' in error_str or 'Unknown' in error_str:
+                if '403' in error_str or 'unknown' in error_str:
                     logger.warning(f"Possible 403/session error on attempt {attempt + 1}: {e}")
                     if attempt == 0:
                         logger.info("Trying fresh login and retry...")
@@ -135,7 +223,7 @@ class InstagramHandler:
                             self.fresh_login()
                         except Exception as login_err:
                             logger.error(f"Fresh login failed: {login_err}")
-                            raise e
+                            raise login_err
                     else:
                         raise e
                 else:
