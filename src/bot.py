@@ -923,11 +923,17 @@ async def reset_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Invia anche i dettagli tecnici in un messaggio separato per debug
             if info.get('last_json'):
                 try:
-                    await update.message.reply_text(f"🔧 Debug info (last_json):\n```\n{info.get('last_json', '')[:1000]}\n```", parse_mode='Markdown')
-                except:
-                    await update.message.reply_text(f"🔧 Debug info: {info.get('last_json', '')[:500]}")
+                    debug_json = str(info.get('last_json', ''))[:1000].replace('`', "'")
+                    await update.message.reply_text(f"🔧 Debug info (last_json):\n{debug_json}")
+                except Exception as debug_err:
+                    logger.warning(f"Could not send debug info: {debug_err}")
             
-            await msg.edit_text(debug_text, parse_mode='Markdown')
+            # Rimuovi caratteri problematici per Markdown
+            safe_debug_text = debug_text.replace('`', "'").replace('_', '-')
+            try:
+                await msg.edit_text(safe_debug_text, parse_mode='Markdown')
+            except:
+                await msg.edit_text(safe_debug_text)
         else:
             # Errore generico con info di debug
             info = result.get('info', {})
@@ -935,9 +941,10 @@ async def reset_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if info.get('last_json'):
                 try:
-                    await update.message.reply_text(f"🔧 Debug info:\n```\n{info.get('last_json', '')[:1000]}\n```", parse_mode='Markdown')
-                except:
-                    await update.message.reply_text(f"🔧 Debug: {info.get('last_json', '')[:500]}")
+                    debug_json = str(info.get('last_json', ''))[:800].replace('`', "'")
+                    await update.message.reply_text(f"🔧 Debug info:\n{debug_json}")
+                except Exception as debug_err:
+                    logger.warning(f"Could not send debug info: {debug_err}")
             
             await msg.edit_text(error_text)
             

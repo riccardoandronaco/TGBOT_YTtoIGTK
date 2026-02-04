@@ -69,7 +69,29 @@ class InstagramHandler:
         self.cl.request_timeout = 120
         self._pending_challenge = False
         self._challenge_info = {}
+        self._setup_device_settings()
         self._setup_challenge_handler()
+    
+    def _setup_device_settings(self):
+        """
+        Configura device settings aggiornati per evitare 'unsupported_version'.
+        Simula un dispositivo Android recente con versione Instagram aggiornata.
+        """
+        self.cl.set_device({
+            "app_version": "269.0.0.18.75",
+            "android_version": 31,
+            "android_release": "12",
+            "dpi": "480dpi",
+            "resolution": "1080x2400",
+            "manufacturer": "Samsung",
+            "device": "SM-G991B",
+            "model": "galaxy s21",
+            "cpu": "exynos2100",
+            "version_code": "314665256"
+        })
+        self.cl.set_user_agent(
+            "Instagram 269.0.0.18.75 Android (31/12; 480dpi; 1080x2400; samsung; SM-G991B; o1s; exynos2100; it_IT; 314665256)"
+        )
     
     def _setup_challenge_handler(self):
         """Setup the challenge handler for 2FA/verification."""
@@ -102,6 +124,7 @@ class InstagramHandler:
         # Create new client
         self.cl = Client()
         self.cl.request_timeout = 120
+        self._setup_device_settings()
         self._setup_challenge_handler()
         
         try:
@@ -188,6 +211,7 @@ class InstagramHandler:
         # Create new client and login
         self.cl = Client()
         self.cl.request_timeout = 120
+        self._setup_device_settings()
         self._setup_challenge_handler()
         
         try:
@@ -226,7 +250,8 @@ class InstagramHandler:
             self.cl = Client()
             self.cl.request_timeout = 120
             
-            # Setup handler
+            # Setup device and handler
+            self._setup_device_settings()
             self._setup_challenge_handler()
             
             # Try login - this will trigger challenge
@@ -332,6 +357,7 @@ class InstagramHandler:
             try:
                 logger.info("Attempting fresh login...")
                 self.cl = Client()
+                self._setup_device_settings()
                 self._setup_challenge_handler()
                 self.cl.login(self.username, self.password)
                 self._pending_challenge = False
