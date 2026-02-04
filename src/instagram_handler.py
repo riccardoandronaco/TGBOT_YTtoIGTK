@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import json
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired, ClientError, ChallengeRequired
 from pydantic import ValidationError
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 # Global variable to store verification code from Telegram
 _verification_code = None
 _verification_event = threading.Event()
+_challenge_info = {}  # Store challenge info for debugging
 
 
 def set_verification_code(code: str):
@@ -19,17 +21,29 @@ def set_verification_code(code: str):
     _verification_event.set()
 
 
+def get_challenge_info() -> dict:
+    """Get current challenge info for debugging."""
+    return _challenge_info
+
+
 def get_verification_code(username, choice) -> str:
     """
     Challenge handler that waits for verification code from Telegram.
     choice: 0 = SMS, 1 = Email
     """
-    global _verification_code, _verification_event
+    global _verification_code, _verification_event, _challenge_info
     
     _verification_code = None
     _verification_event.clear()
     
     method = "SMS" if choice == 0 else "Email"
+    _challenge_info = {
+        'status': 'waiting_code',
+        'method': method,
+        'choice': choice,
+        'username': username
+    }
+    
     logger.info(f"Challenge required! Instagram will send code via {method}. Waiting for /verifyig command...")
     
     # Wait up to 5 minutes for code
@@ -37,9 +51,11 @@ def get_verification_code(username, choice) -> str:
         code = _verification_code
         _verification_code = None
         _verification_event.clear()
+        _challenge_info['status'] = 'code_received'
         logger.info(f"Received verification code: {code}")
         return code
     else:
+        _challenge_info['status'] = 'timeout'
         logger.error("Timeout waiting for verification code")
         raise Exception("Timeout: nessun codice inserito entro 5 minuti. Usa /verifyig <codice>")
 
@@ -52,6 +68,7 @@ class InstagramHandler:
         self.cl = Client()
         self.cl.request_timeout = 120
         self._pending_challenge = False
+        self._challenge_info = {}
         self._setup_challenge_handler()
     
     def _setup_challenge_handler(self):
@@ -61,6 +78,98 @@ class InstagramHandler:
     def is_pending_challenge(self):
         """Check if there's a pending challenge waiting for code."""
         return self._pending_challenge
+    
+    def get_last_challenge_info(self) -> dict:
+        """Get info about the last challenge for debugging."""
+        return self._challenge_info
+
+    def fresh_login_with_challenge(self):
+        """
+        Forza un login pulito con gestione esplicita del challenge.
+        Ritorna info sul challenge se richiesto.
+        """
+        global _challenge_info
+        logger.info("Performing fresh login (deleting old session)...")
+        
+        # Delete old session
+        if os.path.exists(self.session_file):
+            try:
+                os.remove(self.session_file)
+                logger.info(f"Deleted old session file: {self.session_file}")
+            except Exception as e:
+                logger.warning(f"Could not delete session file: {e}")
+        
+        # Create new client
+        self.cl = Client()
+        self.cl.request_timeout = 120
+        self._setup_challenge_handler()
+        
+        try:
+            # First attempt - this might trigger challenge
+            self.cl.login(self.username, self.password)
+            self.cl.dump_settings(self.session_file)
+            logger.info("Fresh login completed and session saved.")
+            self._pending_challenge = False
+            self._challenge_info = {'status': 'success'}
+            return {'success': True, 'message': 'Login completato con successo!'}
+            
+        except ChallengeRequired as e:
+            logger.warning(f"Challenge required: {e}")
+            self._pending_challenge = True
+            
+            # Try to get challenge info and trigger code sending
+            try:
+                # Get the challenge URL from the exception or client
+                challenge_url = self.cl.last_json.get('challenge', {}).get('api_path', '')
+                
+                self._challenge_info = {
+                    'status': 'challenge_required',
+                    'challenge_url': challenge_url,
+                    'error': str(e),
+                    'last_json': str(self.cl.last_json)[:500] if hasattr(self.cl, 'last_json') else 'N/A'
+                }
+                _challenge_info = self._challenge_info
+                
+                return {
+                    'success': False, 
+                    'challenge': True,
+                    'message': 'Challenge richiesto. Usa /verifyig dopo aver ricevuto il codice.',
+                    'info': self._challenge_info
+                }
+            except Exception as inner_e:
+                logger.error(f"Error getting challenge info: {inner_e}")
+                self._challenge_info = {'status': 'challenge_error', 'error': str(inner_e)}
+                return {
+                    'success': False,
+                    'challenge': True, 
+                    'message': f'Challenge richiesto ma errore nel recupero info: {inner_e}',
+                    'info': self._challenge_info
+                }
+                
+        except Exception as e:
+            error_str = str(e).lower()
+            self._challenge_info = {
+                'status': 'error',
+                'error': str(e),
+                'last_json': str(self.cl.last_json)[:500] if hasattr(self.cl, 'last_json') else 'N/A'
+            }
+            _challenge_info = self._challenge_info
+            
+            if 'challenge' in error_str or 'checkpoint' in error_str:
+                self._pending_challenge = True
+                return {
+                    'success': False,
+                    'challenge': True,
+                    'message': f'Challenge/Checkpoint richiesto: {e}',
+                    'info': self._challenge_info
+                }
+            
+            return {
+                'success': False,
+                'challenge': False,
+                'message': f'Errore login: {e}',
+                'info': self._challenge_info
+            }
 
     def fresh_login(self):
         """
@@ -96,6 +205,103 @@ class InstagramHandler:
                 self._pending_challenge = True
                 raise Exception("CHALLENGE_REQUIRED: Instagram richiede verifica. Controlla email/SMS e usa /verifyig <codice>")
             raise e
+
+    def trigger_email_verification(self):
+        """
+        Prova a triggerare l'invio del codice di verifica via email.
+        Usa challenge_resolve_simple che seleziona automaticamente email.
+        """
+        global _challenge_info
+        logger.info("Attempting to trigger email verification...")
+        
+        try:
+            # Delete old session first
+            if os.path.exists(self.session_file):
+                try:
+                    os.remove(self.session_file)
+                except:
+                    pass
+            
+            # Create fresh client
+            self.cl = Client()
+            self.cl.request_timeout = 120
+            
+            # Setup handler
+            self._setup_challenge_handler()
+            
+            # Try login - this will trigger challenge
+            try:
+                self.cl.login(self.username, self.password)
+                self.cl.dump_settings(self.session_file)
+                return {
+                    'success': True,
+                    'message': 'Login completato senza bisogno di verifica!'
+                }
+            except ChallengeRequired as e:
+                logger.info(f"Challenge required, attempting to resolve: {e}")
+                
+                # Get challenge info
+                last_json = getattr(self.cl, 'last_json', {}) or {}
+                challenge_info = last_json.get('challenge', {})
+                api_path = challenge_info.get('api_path', '')
+                
+                _challenge_info = {
+                    'status': 'resolving_challenge',
+                    'api_path': api_path,
+                    'challenge_info': str(challenge_info)[:300]
+                }
+                self._challenge_info = _challenge_info
+                
+                if api_path:
+                    # Try to call the challenge endpoint to trigger code sending
+                    try:
+                        # Request challenge info - this often triggers code sending
+                        challenge_result = self.cl.challenge_resolve(last_json)
+                        
+                        _challenge_info['resolve_result'] = str(challenge_result)[:300]
+                        
+                        return {
+                            'success': False,
+                            'challenge': True,
+                            'code_sent': True,
+                            'message': 'Codice di verifica inviato! Controlla email/SMS.',
+                            'info': _challenge_info
+                        }
+                    except Exception as resolve_err:
+                        logger.warning(f"Challenge resolve failed: {resolve_err}")
+                        _challenge_info['resolve_error'] = str(resolve_err)[:200]
+                        
+                        return {
+                            'success': False,
+                            'challenge': True,
+                            'code_sent': False,
+                            'message': f'Challenge rilevato ma errore nel trigger: {resolve_err}',
+                            'info': _challenge_info
+                        }
+                else:
+                    return {
+                        'success': False,
+                        'challenge': True,
+                        'code_sent': False,
+                        'message': 'Challenge rilevato ma nessun api_path trovato.',
+                        'info': _challenge_info
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Trigger email verification failed: {e}")
+            _challenge_info = {
+                'status': 'error',
+                'error': str(e)[:300],
+                'last_json': str(getattr(self.cl, 'last_json', ''))[:300]
+            }
+            self._challenge_info = _challenge_info
+            
+            return {
+                'success': False,
+                'challenge': False,
+                'message': f'Errore: {e}',
+                'info': _challenge_info
+            }
 
     def login(self):
         """

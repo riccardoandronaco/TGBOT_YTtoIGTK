@@ -906,12 +906,55 @@ async def reset_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, ig_handler.fresh_login)
-        await msg.edit_text("✅ Sessione Instagram resettata con successo!\nOra puoi riprovare a pubblicare.")
+        result = await loop.run_in_executor(None, ig_handler.fresh_login_with_challenge)
+        
+        if result.get('success'):
+            await msg.edit_text("✅ Sessione Instagram resettata con successo!\nOra puoi riprovare a pubblicare.")
+        elif result.get('challenge'):
+            # Challenge richiesto - invia info di debug
+            info = result.get('info', {})
+            debug_text = f"🔐 Challenge/Verifica richiesta!\n\n"
+            debug_text += f"📋 Status: {info.get('status', 'unknown')}\n"
+            debug_text += f"📧 Metodo: {info.get('method', 'N/A')}\n"
+            debug_text += f"🔗 Challenge URL: {info.get('challenge_url', 'N/A')[:50]}...\n\n"
+            debug_text += f"⚠️ {result.get('message', 'Controlla email/SMS')}\n\n"
+            debug_text += "📱 Dopo aver ricevuto il codice, usa:\n`/verifyig <codice>`"
+            
+            # Invia anche i dettagli tecnici in un messaggio separato per debug
+            if info.get('last_json'):
+                try:
+                    await update.message.reply_text(f"🔧 Debug info (last_json):\n```\n{info.get('last_json', '')[:1000]}\n```", parse_mode='Markdown')
+                except:
+                    await update.message.reply_text(f"🔧 Debug info: {info.get('last_json', '')[:500]}")
+            
+            await msg.edit_text(debug_text, parse_mode='Markdown')
+        else:
+            # Errore generico con info di debug
+            info = result.get('info', {})
+            error_text = f"❌ Errore reset Instagram:\n{result.get('message', 'Errore sconosciuto')}"
+            
+            if info.get('last_json'):
+                try:
+                    await update.message.reply_text(f"🔧 Debug info:\n```\n{info.get('last_json', '')[:1000]}\n```", parse_mode='Markdown')
+                except:
+                    await update.message.reply_text(f"🔧 Debug: {info.get('last_json', '')[:500]}")
+            
+            await msg.edit_text(error_text)
+            
     except Exception as e:
         error_str = str(e)
         logger.error(f"Reset IG failed: {e}")
-        if "CHALLENGE_REQUIRED" in error_str:
+        
+        # Cerca di recuperare info dal handler
+        try:
+            from instagram_handler import get_challenge_info
+            challenge_info = get_challenge_info()
+            if challenge_info:
+                await update.message.reply_text(f"🔧 Challenge info:\n{challenge_info}")
+        except:
+            pass
+        
+        if "challenge" in error_str.lower() or "checkpoint" in error_str.lower():
             await msg.edit_text("⚠️ Instagram richiede verifica!\n\n1. Controlla email/SMS per il codice\n2. Usa /verifyig <codice> per completare\n\nEsempio: `/verifyig 123456`", parse_mode='Markdown')
         else:
             await msg.edit_text(f"❌ Errore reset Instagram: {e}")
@@ -936,6 +979,36 @@ async def verify_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_verification_code(code)
     
     await update.message.reply_text("✅ Codice inviato! Se il login era in attesa, dovrebbe completarsi.\nRiprova /resetig o /batchig.")
+
+
+async def trigger_email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prova a triggerare l'invio del codice email di verifica Instagram."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+    
+    msg = await update.message.reply_text("📧 Tentativo di inviare il codice di verifica via email...")
+    
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, ig_handler.trigger_email_verification)
+        
+        if result.get('success'):
+            await msg.edit_text("✅ " + result.get('message', 'Operazione completata!'))
+        elif result.get('code_sent'):
+            await msg.edit_text(f"📧 {result.get('message', 'Codice inviato!')}\n\nOra inserisci il codice con:\n`/verifyig <codice>`", parse_mode='Markdown')
+        else:
+            # Mostra info di debug
+            info = result.get('info', {})
+            debug_msg = f"⚠️ {result.get('message', 'Challenge rilevato')}\n\n"
+            debug_msg += f"📋 Info:\n"
+            for key, val in info.items():
+                debug_msg += f"- {key}: {str(val)[:100]}\n"
+            
+            await msg.edit_text(debug_msg[:4000])
+            
+    except Exception as e:
+        logger.error(f"Trigger email failed: {e}")
+        await msg.edit_text(f"❌ Errore: {e}")
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1331,6 +1404,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('check', check_command))
     application.add_handler(CommandHandler('resetig', reset_instagram))
     application.add_handler(CommandHandler('verifyig', verify_instagram))
+    application.add_handler(CommandHandler('triggeremail', trigger_email_command))
     application.add_handler(CommandHandler('update', update_command))
     application.add_handler(CommandHandler('recap', recap_stats))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
