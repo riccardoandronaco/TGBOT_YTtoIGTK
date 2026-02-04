@@ -1,6 +1,6 @@
 python-telegram-bot[job-queue]>=21.0
 yt-dlp
-instagrapi
+instagrapi>=2.1.0
 python-dotenv
 playwright
 requests

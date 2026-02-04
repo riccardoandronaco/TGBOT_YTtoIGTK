@@ -75,23 +75,35 @@ class InstagramHandler:
     def _setup_device_settings(self):
         """
         Configura device settings aggiornati per evitare 'unsupported_version'.
-        Simula un dispositivo Android recente con versione Instagram aggiornata.
+        Simula un dispositivo Android recente con versione Instagram aggiornata (Gennaio 2026).
         """
+        # Versione Instagram più recente (Gennaio 2026)
+        app_version = "330.0.0.40.92"
+        version_code = "584232578"
+        
         self.cl.set_device({
-            "app_version": "269.0.0.18.75",
-            "android_version": 31,
-            "android_release": "12",
-            "dpi": "480dpi",
-            "resolution": "1080x2400",
-            "manufacturer": "Samsung",
-            "device": "SM-G991B",
-            "model": "galaxy s21",
-            "cpu": "exynos2100",
-            "version_code": "314665256"
+            "app_version": app_version,
+            "android_version": 34,
+            "android_release": "14",
+            "dpi": "440dpi",
+            "resolution": "1080x2340",
+            "manufacturer": "Google",
+            "device": "oriole",
+            "model": "Pixel 6",
+            "cpu": "arm64-v8a",
+            "version_code": version_code
         })
+        
+        # User agent aggiornato
         self.cl.set_user_agent(
-            "Instagram 269.0.0.18.75 Android (31/12; 480dpi; 1080x2400; samsung; SM-G991B; o1s; exynos2100; it_IT; 314665256)"
+            f"Instagram {app_version} Android (34/14; 440dpi; 1080x2340; Google/google; Pixel 6; oriole; arm64-v8a; it_IT; {version_code})"
         )
+        
+        # Imposta anche il locale
+        self.cl.set_locale("it_IT")
+        self.cl.set_country("IT")
+        self.cl.set_country_code(39)
+        self.cl.set_timezone_offset(3600)  # UTC+1 (Italia)
     
     def _setup_challenge_handler(self):
         """Setup the challenge handler for 2FA/verification."""
