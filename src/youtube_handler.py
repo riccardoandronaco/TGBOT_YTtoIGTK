@@ -16,6 +16,23 @@ class YouTubeHandler:
         Downloads a video from YouTube (Shorts or regular) using yt-dlp.
         Returns a dictionary with 'path', 'title', and 'description'.
         """
+        # Fix for video IDs starting with '-' (yt-dlp treats them as flags)
+        # Ensure URL is in full format, not just the ID
+        if url and not url.startswith('http'):
+            # It's just a video ID, convert to full URL
+            url = f"https://www.youtube.com/watch?v={url}"
+        elif url and 'youtube.com/shorts/' in url:
+            # Extract ID from shorts URL and use watch URL format
+            # This avoids issues with special characters in shorts URLs
+            video_id = url.split('/shorts/')[-1].split('?')[0].split('&')[0]
+            url = f"https://www.youtube.com/watch?v={video_id}"
+        elif url and 'youtu.be/' in url:
+            # Convert youtu.be short links
+            video_id = url.split('youtu.be/')[-1].split('?')[0].split('&')[0]
+            url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        logger.info(f"Normalized URL: {url}")
+        
         # Force H.264 video and AAC audio for maximum compatibility with TikTok
         ydl_opts = {
             'format': 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -24,6 +41,10 @@ class YouTubeHandler:
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
+            # Extra options to handle edge cases
+            'nocheckcertificate': True,  # Avoid SSL issues on RPi
+            'geo_bypass': True,  # Bypass geo restrictions
+            'socket_timeout': 30,  # Increase timeout
             # Post processor to ensure consistent format if not avc1
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
@@ -31,54 +52,144 @@ class YouTubeHandler:
             }],
         }
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                logger.info(f"Fetching info for {url}")
-                info_dict = ydl.extract_info(url, download=False)
-                
-                video_id = info_dict.get('id')
-                
-                # Check if file already exists
-                expected_filename_base = os.path.join(self.download_path, video_id)
-                found_existing = None
-                for ext in ['.mp4', '.mkv', '.webm']:
-                    if os.path.exists(expected_filename_base + ext):
-                        found_existing = expected_filename_base + ext
-                        break
-                
-                is_cached = False
-                if found_existing:
-                    logger.info(f"Video {video_id} already exists at {found_existing}. Skipping download.")
-                    filename = found_existing
-                    is_cached = True
-                else:
-                    # Check if it's a short (usually < 60s and vertical, but yt-dlp handles it as video)
-                    # We proceed to download
-                    logger.info(f"Downloading {url}")
-                    ydl.download([url])
-                    
-                    filename = ydl.prepare_filename(info_dict)
-                    
-                    # yt-dlp might merge video and audio into mkv if mp4 is not available directly, 
-                    # but we requested mp4. If it merges, it might change extension.
-                    # Let's verify the file exists, or find the one that was created.
-                    if not os.path.exists(filename):
-                        # Try to find the file with the same base name
-                        base_name = os.path.splitext(filename)[0]
-                        for ext in ['.mp4', '.mkv', '.webm']:
-                            if os.path.exists(base_name + ext):
-                                filename = base_name + ext
-                                break
-                
-                return {
-                    'id': info_dict.get('id'),
-                    'path': filename,
-                    'title': info_dict.get('title', 'No Title'),
-                    'description': info_dict.get('description', ''),
-                    'duration': info_dict.get('duration', 0),
-                    'thumbnail': info_dict.get('thumbnail', None),
-                    'is_cached': is_cached
+        # Multiple retry strategies for 403 errors
+        retry_configs = [
+            # Strategy 1: Default
+            {},
+            # Strategy 2: Android client (often bypasses restrictions)
+            {
+                'extractor_args': {'youtube': {'player_client': ['android']}},
+                'http_headers': {
+                    'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
                 }
+            },
+            # Strategy 3: iOS client 
+            {
+                'extractor_args': {'youtube': {'player_client': ['ios']}},
+                'http_headers': {
+                    'User-Agent': 'com.google.ios.youtube/17.36.4 (iPhone; CPU iPhone OS 15_6 like Mac OS X)',
+                }
+            },
+            # Strategy 4: Web client with browser headers
+            {
+                'extractor_args': {'youtube': {'player_client': ['web']}},
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            },
+            # Strategy 5: mweb (mobile web)
+            {
+                'extractor_args': {'youtube': {'player_client': ['mweb']}},
+            },
+        ]
+        
+        info_dict = None
+        last_error = None
+        
+        for i, extra_opts in enumerate(retry_configs):
+            try:
+                current_opts = ydl_opts.copy()
+                current_opts.update(extra_opts)
+                
+                with yt_dlp.YoutubeDL(current_opts) as ydl:
+                    if i == 0:
+                        logger.info(f"Fetching info for {url}")
+                    else:
+                        logger.info(f"Retry {i}/4 with strategy: {list(extra_opts.get('extractor_args', {}).get('youtube', {}).get('player_client', ['default']))}")
+                    
+                    info_dict = ydl.extract_info(url, download=False)
+                    
+                    if info_dict:
+                        logger.info(f"Success with strategy {i}")
+                        break
+                        
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                
+                if '403' in str(e) or 'forbidden' in error_str or 'blocked' in error_str:
+                    logger.warning(f"Strategy {i} failed with 403/blocked, trying next...")
+                    import time
+                    time.sleep(2)  # Small delay between retries
+                    continue
+                elif 'video unavailable' in error_str or 'private' in error_str:
+                    # Video genuinely unavailable, don't retry
+                    raise e
+                else:
+                    # Unknown error, try next strategy anyway
+                    logger.warning(f"Strategy {i} failed: {e}")
+                    continue
+        
+        if not info_dict:
+            raise last_error or Exception("All download strategies failed")
+        
+        try:
+            video_id = info_dict.get('id')
+            
+            # Sanitize video_id for filename (replace problematic chars)
+            safe_video_id = video_id.replace('-', '_') if video_id else 'unknown'
+            
+            # Check if file already exists (try both original and sanitized ID)
+            expected_filename_base = os.path.join(self.download_path, video_id)
+            safe_filename_base = os.path.join(self.download_path, safe_video_id)
+            
+            found_existing = None
+            for base in [expected_filename_base, safe_filename_base]:
+                for ext in ['.mp4', '.mkv', '.webm']:
+                    if os.path.exists(base + ext):
+                        found_existing = base + ext
+                        break
+                if found_existing:
+                    break
+            
+            is_cached = False
+            if found_existing:
+                logger.info(f"Video {video_id} already exists at {found_existing}. Skipping download.")
+                filename = found_existing
+                is_cached = True
+            else:
+                # Proceed to download using the strategy that worked for info extraction
+                logger.info(f"Downloading {url}")
+                
+                # Find which strategy worked and use it for download
+                for i, extra_opts in enumerate(retry_configs):
+                    try:
+                        current_opts = ydl_opts.copy()
+                        current_opts.update(extra_opts)
+                        
+                        with yt_dlp.YoutubeDL(current_opts) as ydl:
+                            ydl.download([url])
+                            filename = ydl.prepare_filename(info_dict)
+                            break
+                    except Exception as dl_err:
+                        if i < len(retry_configs) - 1:
+                            logger.warning(f"Download strategy {i} failed, trying next...")
+                            import time
+                            time.sleep(2)
+                            continue
+                        else:
+                            raise dl_err
+                
+                # yt-dlp might merge video and audio into mkv if mp4 is not available directly
+                if not os.path.exists(filename):
+                    # Try to find the file with the same base name
+                    base_name = os.path.splitext(filename)[0]
+                    for ext in ['.mp4', '.mkv', '.webm']:
+                        if os.path.exists(base_name + ext):
+                            filename = base_name + ext
+                            break
+            
+            return {
+                'id': info_dict.get('id'),
+                'path': filename,
+                'title': info_dict.get('title', 'No Title'),
+                'description': info_dict.get('description', ''),
+                'duration': info_dict.get('duration', 0),
+                'thumbnail': info_dict.get('thumbnail', None),
+                'is_cached': is_cached
+            }
         except Exception as e:
             logger.error(f"Error downloading video: {e}")
             raise e
