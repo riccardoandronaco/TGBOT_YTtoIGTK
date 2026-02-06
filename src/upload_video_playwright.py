@@ -370,33 +370,151 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
         
         # RPi FIX: Wait longer for page to fully render
         log("   Waiting for page to stabilize...")
-        time.sleep(3)
+        time.sleep(5)
+        
+        # Take screenshot to see current state
+        take_screenshot(page, "2a_before_file_input.png")
         
         try:
-            # STRATEGY B ONLY: Direct Input Injection (more reliable)
-            log("   Finding file input element...")
+            log("   Attempting file upload...")
             input_found = False
             
-            # Try main page first
-            file_input = page.locator('input[type="file"]').first
-            if file_input.count() > 0:
-                log("   Found input on main page, setting file...")
-                file_input.set_input_files(video_path, timeout=180000)  # 3 minutes
-                input_found = True
-            
-            # Try each frame if not found
-            if not input_found:
-                log(f"   Searching in {len(page.frames)} frames...")
-                for idx, frame in enumerate(page.frames):
+            # ============================================
+            # STRATEGY 1: Use file_chooser (for native dialog)
+            # This intercepts the OS file picker dialog
+            # ============================================
+            try:
+                log("   Strategy 1: File chooser (native dialog)...")
+                
+                # Find the clickable upload button/area
+                upload_btn = None
+                upload_selectors = [
+                    'button:has-text("Select video")',
+                    'div:has-text("Select video to upload")',
+                    '[class*="upload-btn"]',
+                    '[class*="select-btn"]',
+                    'button[class*="upload"]',
+                    # The upload area itself
+                    '[class*="upload-card"]',
+                    '[class*="upload-area"]',
+                    '[class*="drop-zone"]',
+                ]
+                
+                for sel in upload_selectors:
                     try:
-                        fi = frame.locator('input[type="file"]').first
-                        if fi.count() > 0:
-                            log(f"   Found input in frame {idx}: {frame.url[:50]}...")
-                            fi.set_input_files(video_path, timeout=180000)  # 3 minutes
-                            input_found = True
+                        btn = page.locator(sel).first
+                        if btn.count() > 0 and btn.is_visible():
+                            upload_btn = btn
+                            log(f"   Found clickable element: {sel}")
                             break
                     except:
                         continue
+                
+                if upload_btn:
+                    # Set up file chooser listener BEFORE clicking
+                    with page.expect_file_chooser(timeout=30000) as fc_info:
+                        log("   Clicking upload button...")
+                        upload_btn.click()
+                    
+                    file_chooser = fc_info.value
+                    log("   File chooser opened! Setting file...")
+                    file_chooser.set_files(video_path)
+                    input_found = True
+                    log("   ✓ File set via file chooser!")
+                else:
+                    log("   No upload button found for file chooser strategy")
+                    
+            except Exception as fc_err:
+                log(f"   File chooser strategy failed: {fc_err}")
+            
+            # ============================================
+            # STRATEGY 2: Direct input injection (fallback)
+            # ============================================
+            if not input_found:
+                log("   Strategy 2: Direct input injection...")
+                
+                # Make all file inputs visible
+                try:
+                    page.evaluate('''() => {
+                        const inputs = document.querySelectorAll('input[type="file"]');
+                        inputs.forEach(input => {
+                            input.style.display = 'block';
+                            input.style.visibility = 'visible';
+                            input.style.opacity = '1';
+                            input.style.position = 'relative';
+                            input.style.width = '100px';
+                            input.style.height = '100px';
+                        });
+                    }''')
+                    time.sleep(1)
+                except:
+                    pass
+                
+                # Try main page
+                file_input = page.locator('input[type="file"]').first
+                if file_input.count() > 0:
+                    log("   Found input on main page, setting file...")
+                    file_input.set_input_files(video_path, timeout=180000)
+                    input_found = True
+                
+                # Try frames
+                if not input_found:
+                    log(f"   Searching in {len(page.frames)} frames...")
+                    for idx, frame in enumerate(page.frames):
+                        try:
+                            # Make inputs visible in frame
+                            frame.evaluate('''() => {
+                                const inputs = document.querySelectorAll('input[type="file"]');
+                                inputs.forEach(input => {
+                                    input.style.display = 'block';
+                                    input.style.visibility = 'visible';
+                                });
+                            }''')
+                            
+                            fi = frame.locator('input[type="file"]').first
+                            if fi.count() > 0:
+                                log(f"   Found input in frame {idx}: {frame.url[:50]}...")
+                                fi.set_input_files(video_path, timeout=180000)
+                                input_found = True
+                                break
+                        except:
+                            continue
+            
+            # ============================================
+            # STRATEGY 3: Drag and drop simulation
+            # ============================================
+            if not input_found:
+                log("   Strategy 3: Drag and drop simulation...")
+                try:
+                    # Find drop zone
+                    drop_zone = page.locator('[class*="upload"], [class*="drop"], div:has-text("Select video to upload")').first
+                    
+                    if drop_zone.count() > 0:
+                        # Create a DataTransfer with the file
+                        with open(video_path, 'rb') as f:
+                            file_content = f.read()
+                        
+                        # Use JavaScript to simulate drop
+                        page.evaluate('''(args) => {
+                            const [filePath, fileName] = args;
+                            const dropZone = document.querySelector('[class*="upload"], [class*="drop"]');
+                            if (!dropZone) return false;
+                            
+                            // Create drop event
+                            const dataTransfer = new DataTransfer();
+                            const dropEvent = new DragEvent('drop', {
+                                bubbles: true,
+                                cancelable: true,
+                                dataTransfer: dataTransfer
+                            });
+                            dropZone.dispatchEvent(dropEvent);
+                            return true;
+                        }''', [video_path, os.path.basename(video_path)])
+                        
+                        log("   Attempted drag & drop simulation")
+                        time.sleep(3)
+                except Exception as dd_err:
+                    log(f"   Drag & drop failed: {dd_err}")
             
             if not input_found:
                 # DEBUG: List all frames and their content
@@ -413,9 +531,106 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
             
             log("   ✓ File set successfully!")
             
-            # Wait a sec for upload interface to react
-            time.sleep(5)
-            take_screenshot(page, "2b_after_file_set.png")
+            # Wait for upload to actually start and complete
+            # The spinner on the button means upload is in progress
+            log("   Waiting for file upload to complete...")
+            
+            upload_started = False
+            upload_complete = False
+            max_wait_seconds = 300  # 5 minutes max for upload
+            
+            for wait_sec in range(max_wait_seconds):
+                try:
+                    # Take periodic screenshots for debugging
+                    if wait_sec % 30 == 0 and wait_sec > 0:
+                        take_screenshot(page, f"2b_upload_wait_{wait_sec}s.png")
+                        log(f"   Still waiting for upload... ({wait_sec}s)")
+                    
+                    # Check for upload progress indicators
+                    page_html = page.content()
+                    
+                    # Signs that upload is complete:
+                    # 1. Caption/description editor visible
+                    # 2. "Uploaded" text
+                    # 3. Video preview visible
+                    # 4. Progress shows 100%
+                    
+                    # Check for caption editor (means upload done)
+                    caption_visible = False
+                    for selector in ['.public-DraftEditor-content', '[contenteditable="true"]', 'div[role="textbox"]']:
+                        try:
+                            if page.locator(selector).first.is_visible():
+                                caption_visible = True
+                                break
+                        except:
+                            pass
+                    
+                    if caption_visible:
+                        log("   ✓ Caption editor visible - upload complete!")
+                        upload_complete = True
+                        break
+                    
+                    # Check for "Uploaded" text
+                    if 'Uploaded' in page_html or 'uploaded' in page_html.lower():
+                        log("   ✓ 'Uploaded' text found!")
+                        upload_complete = True
+                        break
+                    
+                    # Check for video preview (video element or thumbnail)
+                    video_preview = page.locator('video, [class*="preview"], [class*="thumbnail"]').first
+                    if video_preview.count() > 0 and video_preview.is_visible():
+                        log("   ✓ Video preview visible!")
+                        upload_complete = True
+                        break
+                    
+                    # Check for 100% progress
+                    if '100%' in page_html:
+                        log("   ✓ 100% progress found!")
+                        time.sleep(3)  # Wait a bit more after 100%
+                        upload_complete = True
+                        break
+                    
+                    # Check for error messages
+                    error_indicators = ['Upload failed', 'Error', 'Failed to upload', 'try again']
+                    for err in error_indicators:
+                        if err.lower() in page_html.lower():
+                            err_screenshot = take_screenshot(page, "err_upload_failed.png")
+                            log(f"   ❌ Upload error detected: {err}", err_screenshot)
+                            raise Exception(f"Upload failed: {err}")
+                    
+                    # Check if spinner is visible (upload in progress)
+                    spinner_visible = False
+                    spinner_selectors = [
+                        '[class*="spinner"]', 
+                        '[class*="loading"]', 
+                        '[class*="progress"]',
+                        'svg[class*="spin"]',
+                        '[aria-busy="true"]'
+                    ]
+                    for sp in spinner_selectors:
+                        try:
+                            if page.locator(sp).first.is_visible():
+                                spinner_visible = True
+                                if not upload_started:
+                                    log("   Upload in progress (spinner visible)...")
+                                    upload_started = True
+                                break
+                        except:
+                            pass
+                    
+                    time.sleep(1)
+                    
+                except Exception as inner_e:
+                    logger.debug(f"Wait loop error: {inner_e}")
+                    time.sleep(1)
+            
+            if not upload_complete:
+                # Final check with screenshot
+                final_screenshot = take_screenshot(page, "2c_upload_timeout.png")
+                log(f"⚠️ Upload did not complete in {max_wait_seconds}s", final_screenshot)
+                # Don't fail yet - maybe caption is visible anyway
+            
+            take_screenshot(page, "2d_after_upload_wait.png")
             
         except Exception as e:
             logger.error(f"Failed to set input file: {e}")
