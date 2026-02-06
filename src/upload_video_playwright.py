@@ -298,13 +298,13 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                      upload_btn.click()
                      # Wait again
                      time.sleep(5)
-                     page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=60000)
+                     page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=180000)
                  else:
                      # Check if we are just stuck loading (Spinner)
                      # If so, a reload might help
                      log("   No Upload button found. Trying Page Reload...")
                      page.reload()
-                     page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=60000)
+                     page.wait_for_selector('iframe, input[type="file"], [aria-label="Select video"], button:has-text("Select video"), div:has-text("Select video to upload")', timeout=180000)
                      
              except Exception as manual_nav_e:
                  log(f"   Fallback navigation/reload failed: {manual_nav_e}")
@@ -356,7 +356,7 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
             log("⚠️ Page appears stuck on spinner. Sending screenshot and aborting...", pre_upload_screenshot)
             # Try one more reload
             log("   Attempting page reload...")
-            page.reload(timeout=60000, wait_until="domcontentloaded")
+            page.reload(timeout=120000, wait_until="domcontentloaded")  # 2 minutes
             time.sleep(10)
             take_screenshot(page, "2_after_reload.png")
             page_html = page.content()
@@ -381,7 +381,7 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
             file_input = page.locator('input[type="file"]').first
             if file_input.count() > 0:
                 log("   Found input on main page, setting file...")
-                file_input.set_input_files(video_path, timeout=60000)
+                file_input.set_input_files(video_path, timeout=180000)  # 3 minutes
                 input_found = True
             
             # Try each frame if not found
@@ -392,7 +392,7 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
                         fi = frame.locator('input[type="file"]').first
                         if fi.count() > 0:
                             log(f"   Found input in frame {idx}: {frame.url[:50]}...")
-                            fi.set_input_files(video_path, timeout=60000)
+                            fi.set_input_files(video_path, timeout=180000)  # 3 minutes
                             input_found = True
                             break
                     except:
@@ -486,10 +486,45 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
         
         # Wait for the editor container or caption input
         # The caption editor is inside a div with 'DraftEditor' usually
+        # TikTok Studio 2026 might have different selectors
         try:
-            # Wait for caption area
-            caption_locator = upload_frame.locator('.public-DraftEditor-content')
-            caption_locator.wait_for(state="visible", timeout=60000)
+            # Wait for caption area - try multiple selectors
+            caption_selectors = [
+                '.public-DraftEditor-content',
+                '[data-testid="caption-input"]',
+                '[contenteditable="true"]',
+                'div[role="textbox"]',
+                '.notranslate[contenteditable]',
+                'textarea[placeholder*="caption"]',
+                'textarea[placeholder*="description"]',
+            ]
+            
+            caption_locator = None
+            for selector in caption_selectors:
+                try:
+                    loc = upload_frame.locator(selector).first
+                    loc.wait_for(state="visible", timeout=180000)  # 3 minutes
+                    caption_locator = loc
+                    log(f"   Found caption editor: {selector}")
+                    break
+                except:
+                    continue
+            
+            if not caption_locator:
+                # Last resort: try on main page instead of iframe
+                log("   Trying caption selector on main page...")
+                for selector in caption_selectors:
+                    try:
+                        loc = page.locator(selector).first
+                        if loc.is_visible():
+                            caption_locator = loc
+                            log(f"   Found caption on main page: {selector}")
+                            break
+                    except:
+                        continue
+            
+            if not caption_locator:
+                raise Exception("Caption editor not found with any selector")
             
             # DISMISS ANY BLOCKING OVERLAYS BEFORE CLICKING
             dismiss_modals()
@@ -672,7 +707,7 @@ def diagnostic_check_headless(cookie_path=None):
                 info["ip"] = "Failed to grab"
 
             # 2. Check TikTok Home & Login Status
-            page.goto("https://www.tiktok.com/?lang=en", timeout=60000, wait_until="domcontentloaded")
+            page.goto("https://www.tiktok.com/?lang=en", timeout=120000, wait_until="domcontentloaded")
             time.sleep(5)
             
             # Check Login indicators
