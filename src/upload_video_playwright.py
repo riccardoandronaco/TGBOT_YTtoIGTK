@@ -98,6 +98,25 @@ def upload_video(video_path, caption, cookie_path, headless=None, status_callbac
 
     log(f"Starting Playwright upload for {video_path}")
     
+    # Helper: Clean up old screenshots at the start of each upload
+    def cleanup_old_screenshots():
+        try:
+            debug_dir = os.path.join(os.getcwd(), "debug_screens")
+            if os.path.exists(debug_dir):
+                for filename in os.listdir(debug_dir):
+                    file_path = os.path.join(debug_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                    except:
+                        pass
+                log("   🧹 Cleaned up old screenshots")
+        except:
+            pass
+    
+    # Clean up before starting
+    cleanup_old_screenshots()
+    
     # helper for saving progress screenshot
     def take_screenshot(p, name):
          try:
